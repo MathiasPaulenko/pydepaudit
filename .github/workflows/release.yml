@@ -1,12 +1,13 @@
 name: release
 
 on:
-  release:
-    types: [published]
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
+  contents: write
   id-token: write
-  contents: read
 
 jobs:
   pypi:
@@ -19,3 +20,13 @@ jobs:
           python-version: "3.13"
       - run: pip install build && python -m build
       - uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    runs-on: ubuntu-latest
+    needs: pypi
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+      - run: gh release create "$GITHUB_REF_NAME" --generate-notes --verify-tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
