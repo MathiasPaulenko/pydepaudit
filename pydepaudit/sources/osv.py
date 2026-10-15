@@ -9,6 +9,7 @@ from packaging.version import InvalidVersion, Version
 
 from pydepaudit.cache import FileCache
 from pydepaudit.cvss import base_score, severity_band
+from pydepaudit.cvss4 import base_score_v4
 from pydepaudit.models import Vulnerability
 
 BASE_URL = "https://api.osv.dev"
@@ -220,7 +221,14 @@ def _severity(data: dict[str, Any]) -> str:
         score
         for entry in (entries if isinstance(entries, list) else [])
         if isinstance(entry, dict) and str(entry.get("type", "")).startswith("CVSS")
-        for score in [base_score(str(entry.get("score", "")))]
+        for score in [_cvss_score(str(entry.get("score", "")))]
         if score is not None
     ]
     return severity_band(max(scores) if scores else None)
+
+
+def _cvss_score(vector: str) -> float | None:
+    """Score a CVSS vector of any supported version (3.x or 4.0)."""
+    if vector.startswith("CVSS:4"):
+        return base_score_v4(vector)
+    return base_score(vector)

@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import httpx
 import respx
@@ -166,6 +167,57 @@ def test_query_batch_dedupes_by_alias() -> None:
     assert dup.severity == "high"  # worst severity wins
     assert "PYSEC-b" in dup.aliases and "CVE-2024-1" in dup.aliases
     assert vulns[1].id == "GHSA-c"
+
+
+@respx.mock
+def test_query_batch_cvss_v4_vector() -> None:
+    respx.post("https://api.osv.dev/v1/querybatch").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "vulns": [
+                            {
+                                "id": "CVE-4",
+                                "summary": "",
+                                "severity": [
+                                    {
+                                        "type": "CVSS_V4",
+                                        "score": "CVSS:4.0/AV:N/AC:L/AT:N"
+                                        "/PR:N/UI:N/VC:H/VI:H/VA:H/SC:H"
+                                        "/SI:H/SA:H",
+                                    }
+                                ],
+                            }
+                        ]
+                    }
+                ]
+            },
+        )
+    )
+    vulns = OSVClient().query_batch([("pkg", "1.0")])[0]
+    assert vulns[0].severity == "critical"
+
+
+@respx.mock
+def test_query_batch_hydration_uses_cache(tmp_path: Path) -> None:
+    from pydepaudit.cache import FileCache
+
+    cache = FileCache(tmp_path / "cache")
+    lite = {"vulns": [{"id": "GHSA-c", "modified": "2025-01-01"}]}
+    respx.post("https://api.osv.dev/v1/querybatch").mock(
+        return_value=httpx.Response(200, json={"results": [lite]})
+    )
+    detail = respx.get("https://api.osv.dev/v1/vulns/GHSA-c").mock(
+        return_value=httpx.Response(
+            200, json={"id": "GHSA-c", "summary": "cached", "aliases": []}
+        )
+    )
+    client = OSVClient(cache=cache)
+    assert client.query_batch([("p", "1.0")])[0][0].summary == "cached"
+    assert client.query_batch([("p", "1.0")])[0][0].summary == "cached"
+    assert detail.call_count == 1  # second batch hit the detail cache
 
 
 @respx.mock

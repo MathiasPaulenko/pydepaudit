@@ -1,6 +1,7 @@
 import pytest
 
 from pydepaudit.cvss import base_score, severity_band
+from pydepaudit.cvss4 import base_score_v4
 
 
 @pytest.mark.parametrize(
@@ -30,3 +31,36 @@ def test_base_score_invalid() -> None:
 def test_severity_band(score: float, band: str) -> None:
     assert severity_band(score) == band
     assert severity_band(None) == "unknown"
+
+
+# known-answer vectors verified against the official FIRST/Red Hat calculator
+@pytest.mark.parametrize(
+    ("vector", "expected"),
+    [
+        ("CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:H/SI:H/SA:H", 10.0),
+        ("CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:N/SC:N/SI:N/SA:N", 0.0),
+        (
+            "CVSS:4.0/AV:N/AC:H/AT:N/PR:H/UI:N/VC:L/VI:L/VA:N/SC:H/SI:H/SA:L"
+            "/CR:H/AR:H/MUI:N",
+            5.3,
+        ),
+        (
+            "CVSS:4.0/AV:A/AC:L/AT:P/PR:N/UI:P/VC:H/VI:N/VA:H/SC:L/SI:N/SA:H"
+            "/IR:M/MSA:S/MAV:L",
+            8.4,
+        ),
+        ("CVSS:4.0/AV:N/AC:L/AT:P/PR:L/UI:P/VC:N/VI:H/VA:N/SC:H/SI:N/SA:H/IR:H", 7.0),
+    ],
+)
+def test_base_score_v4(vector: str, expected: float) -> None:
+    assert base_score_v4(vector) == expected
+
+
+def test_base_score_v4_invalid() -> None:
+    assert base_score_v4("not a vector") is None
+    assert base_score_v4("CVSS:3.1/AV:N") is None
+    assert (
+        base_score_v4("CVSS:4.0/AV:X/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:H/SI:H/SA:H")
+        is None
+    )
+    assert base_score_v4("CVSS:4.0/AV:N") is None
