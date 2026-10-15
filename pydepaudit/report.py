@@ -66,6 +66,7 @@ def render_json(results: list[AuditResult]) -> str:
                             "summary": v.summary,
                             "aliases": list(v.aliases),
                             "url": v.url,
+                            "fixed": v.fixed,
                         }
                         for v in r.vulnerabilities
                     ],

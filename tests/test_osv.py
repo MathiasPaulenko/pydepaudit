@@ -99,6 +99,17 @@ def test_query_batch_hydrates_lite_records() -> None:
                 "summary": "real bug",
                 "aliases": ["CVE-2024-1"],
                 "database_specific": {"severity": "HIGH"},
+                "affected": [
+                    {
+                        "package": {"name": "pkg", "ecosystem": "PyPI"},
+                        "ranges": [
+                            {
+                                "type": "ECOSYSTEM",
+                                "events": [{"introduced": "0"}, {"fixed": "1.2.3"}],
+                            }
+                        ],
+                    }
+                ],
             },
         )
     )
@@ -106,6 +117,7 @@ def test_query_batch_hydrates_lite_records() -> None:
     assert vulns[0].severity == "high"
     assert vulns[0].summary == "real bug"
     assert vulns[0].aliases == ("CVE-2024-1",)
+    assert vulns[0].fixed == "1.2.3"
 
 
 @respx.mock

@@ -58,7 +58,8 @@ def _vulnerability_findings(result: AuditResult) -> list[Finding]:
         severity = _VULN_SEVERITY.get(vuln.severity, "low")
         aliases = ", ".join(vuln.aliases[:3])
         label = f" ({aliases})" if aliases else ""
-        message = f"{vuln.id}{label} {vuln.summary}".strip()
+        fixed = f" [fixed in {vuln.fixed}]" if vuln.fixed else ""
+        message = f"{vuln.id}{label}{fixed} {vuln.summary}".strip()
         findings.append(Finding(severity, "vulnerability", message))
     return findings
 

@@ -33,6 +33,7 @@ class Vulnerability:
     severity: str
     aliases: tuple[str, ...] = ()
     url: str = ""
+    fixed: str | None = None
 
 
 @dataclass(frozen=True)

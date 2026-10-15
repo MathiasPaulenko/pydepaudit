@@ -4,6 +4,8 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import httpx
+from packaging.utils import canonicalize_name
+from packaging.version import InvalidVersion, Version
 
 from pydepaudit.cache import FileCache
 from pydepaudit.cvss import base_score, severity_band
@@ -65,9 +67,12 @@ class OSVClient:
         details = self._hydrate(all_raw)
         return [
             _dedupe_vulns(
-                [_vulnerability(details.get(str(v.get("id") or ""), v)) for v in group]
+                [
+                    _vulnerability(details.get(str(v.get("id") or ""), v), name)
+                    for v in group
+                ]
             )
-            for group in all_raw[: len(packages)]
+            for group, (name, _) in zip(all_raw[: len(packages)], packages, strict=True)
         ]
 
     def _hydrate(self, groups: list[list[dict[str, Any]]]) -> dict[str, dict[str, Any]]:
@@ -141,6 +146,7 @@ def _merge_vuln(a: Vulnerability, b: Vulnerability) -> Vulnerability:
         severity=severity,
         aliases=tuple(x for x in aliases if x != a.id),
         url=a.url or b.url,
+        fixed=_min_version(a.fixed, b.fixed),
     )
 
 
@@ -151,7 +157,7 @@ def _is_lite(vuln: dict[str, Any]) -> bool:
     )
 
 
-def _vulnerability(data: dict[str, Any]) -> Vulnerability:
+def _vulnerability(data: dict[str, Any], package_name: str = "") -> Vulnerability:
     vuln_id = str(data.get("id") or "")
     aliases = data.get("aliases")
     summary = data.get("summary")
@@ -161,7 +167,47 @@ def _vulnerability(data: dict[str, Any]) -> Vulnerability:
         severity=_severity(data),
         aliases=tuple(str(a) for a in aliases) if isinstance(aliases, list) else (),
         url=f"https://osv.dev/vulnerability/{vuln_id}" if vuln_id else "",
+        fixed=_fixed_version(data, package_name),
     )
+
+
+def _fixed_version(data: dict[str, Any], package_name: str) -> str | None:
+    """Earliest version where the vuln is fixed for this package, if known."""
+    fixed: list[str] = []
+    for affected in data.get("affected") or []:
+        if not isinstance(affected, dict):
+            continue
+        package = affected.get("package")
+        if not isinstance(package, dict) or package.get("ecosystem") != "PyPI":
+            continue
+        name = package.get("name")
+        if (
+            name
+            and package_name
+            and (
+                str(canonicalize_name(str(name)))
+                != str(canonicalize_name(package_name))
+            )
+        ):
+            continue
+        for range_ in affected.get("ranges") or []:
+            if not isinstance(range_, dict):
+                continue
+            for event in range_.get("events") or []:
+                if isinstance(event, dict) and "fixed" in event:
+                    fixed.append(str(event["fixed"]))
+    return _min_version(*fixed)
+
+
+def _min_version(*versions: str | None) -> str | None:
+    """Smallest parseable version in *versions*, or None."""
+    candidates = [v for v in versions if v]
+    if not candidates:
+        return None
+    try:
+        return str(min(Version(v) for v in candidates))
+    except InvalidVersion:
+        return min(candidates)
 
 
 def _severity(data: dict[str, Any]) -> str:

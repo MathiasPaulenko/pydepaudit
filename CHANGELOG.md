@@ -22,6 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Graceful handling of malformed API payloads, dependency files, network errors
   and non-UTF-8 consoles.
 
+### Added (v0.2 preview)
+
+- Vulnerability records are deduplicated by shared CVE/GHSA/PYSEC aliases and
+  now carry `fixed` — the earliest version resolving the vuln — shown in the
+  table and JSON output.
+
 ### Fixed
 
 - OSV `querybatch` returns trimmed records (id + modified only); vulnerability
