@@ -7,6 +7,7 @@ from typing import Any
 
 import httpx
 
+from pydepaudit.cache import FileCache
 from pydepaudit.models import RepoHealth
 
 BASE_URL = "https://api.github.com"
@@ -33,12 +34,25 @@ class GitHubClient:
     """
 
     def __init__(
-        self, client: httpx.Client | None = None, token: str | None = None
+        self,
+        client: httpx.Client | None = None,
+        token: str | None = None,
+        cache: FileCache | None = None,
     ) -> None:
         self._client = client or _default_client(token)
+        self._cache = cache
 
     def repo_health(self, repo: str) -> RepoHealth | None:
         """Return health signals for 'owner/name', or None if unavailable."""
+        key = f"github:{repo.lower()}"
+        if self._cache is not None and (cached := self._cache.get(key)) is not None:
+            return _from_cached(cached)
+        health = self._fetch(repo)
+        if self._cache is not None:
+            self._cache.set(key, _to_cached(health))
+        return health
+
+    def _fetch(self, repo: str) -> RepoHealth | None:
         response = self._client.get(f"/repos/{repo}")
         if response.status_code in (403, 404):
             return None
@@ -65,6 +79,32 @@ class GitHubClient:
         if match:
             return int(match.group(1))
         return len(response.json())
+
+
+def _to_cached(health: RepoHealth | None) -> dict[str, Any]:
+    if health is None:
+        return {"found": False}
+    return {
+        "found": True,
+        "url": health.url,
+        "archived": health.archived,
+        "pushed_at": health.pushed_at.isoformat() if health.pushed_at else None,
+        "open_issues": health.open_issues,
+        "contributors": health.contributors,
+    }
+
+
+def _from_cached(data: dict[str, Any]) -> RepoHealth | None:
+    if not data.get("found"):
+        return None
+    pushed_at = data.get("pushed_at")
+    return RepoHealth(
+        url=data["url"],
+        archived=bool(data.get("archived", False)),
+        pushed_at=datetime.fromisoformat(pushed_at) if pushed_at else None,
+        open_issues=int(data.get("open_issues", 0)),
+        contributors=data.get("contributors"),
+    )
 
 
 def _default_client(token: str | None) -> httpx.Client:

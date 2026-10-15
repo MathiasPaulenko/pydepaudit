@@ -5,9 +5,11 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from rich.console import Console
 
 from pydepaudit import __version__, report
 from pydepaudit.audit import audit_project
+from pydepaudit.cache import FileCache
 from pydepaudit.config import load
 from pydepaudit.rules import SEVERITY_ORDER, active_findings
 from pydepaudit.sources.github import GitHubClient, find_repo
@@ -55,14 +57,23 @@ def check(
         str | None,
         typer.Option("--license", help="Project license for compatibility checks."),
     ] = None,
+    no_cache: Annotated[
+        bool,
+        typer.Option("--no-cache", help="Bypass the local HTTP cache."),
+    ] = False,
 ) -> None:
     """Audit the dependencies of a project."""
     project = Path(path)
     config = load(project)
     if license_:
         config = replace(config, project_license=license_)
+    cache = None if no_cache else FileCache(project / ".pydepaudit-cache")
 
-    results = audit_project(project, config=config)
+    if format_ == "json":
+        results = audit_project(project, config=config, cache=cache)
+    else:
+        with Console(stderr=True).status("Auditing dependencies…"):
+            results = audit_project(project, config=config, cache=cache)
     if not results:
         typer.echo("No dependency files found in the project.")
         raise typer.Exit(1)

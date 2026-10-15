@@ -1,10 +1,13 @@
 """Audit orchestration: parse project, query sources, evaluate rules."""
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 
 from packaging.specifiers import SpecifierSet
+from packaging.utils import canonicalize_name
 
+from pydepaudit.cache import FileCache
 from pydepaudit.config import Config, load
 from pydepaudit.models import (
     AuditResult,
@@ -19,22 +22,26 @@ from pydepaudit.sources.github import GitHubClient, find_repo
 from pydepaudit.sources.osv import OSVClient
 from pydepaudit.sources.pypi import PyPIClient
 
+_WORKERS = 8
+
 
 def audit_project(
     path: Path,
     config: Config | None = None,
+    cache: FileCache | None = None,
     pypi: PyPIClient | None = None,
     osv: OSVClient | None = None,
     github: GitHubClient | None = None,
 ) -> list[AuditResult]:
     """Audit every declared dependency of the project at *path*."""
-    deps = parse_project(path)
+    deps = _dedupe(parse_project(path))
     if not deps:
         return []
 
     config = config or load(path)
-    pypi = pypi or PyPIClient()
-    metas = [pypi.package(dep.name) for dep in deps]
+    pypi = pypi or PyPIClient(cache=cache)
+    with ThreadPoolExecutor(max_workers=_WORKERS) as pool:
+        metas = list(pool.map(pypi.package, [d.name for d in deps]))
 
     resolved = [
         (index, version)
@@ -49,7 +56,7 @@ def audit_project(
         for (index, _), found in zip(resolved, batch, strict=True):
             vulns[index] = found
 
-    healths = _repo_healths(metas, github or GitHubClient())
+    healths = _repo_healths(metas, github or GitHubClient(cache=cache))
 
     results = []
     for i, (dep, meta) in enumerate(zip(deps, metas, strict=True)):
@@ -63,6 +70,14 @@ def audit_project(
     return results
 
 
+def _dedupe(deps: list[Dependency]) -> list[Dependency]:
+    """Keep the first declaration per normalized package name."""
+    seen: dict[str, Dependency] = {}
+    for dep in deps:
+        seen.setdefault(str(canonicalize_name(dep.name)), dep)
+    return list(seen.values())
+
+
 def _resolved_version(dep: Dependency, meta: PackageMetadata | None) -> str | None:
     """Version to audit: the declared pin if exact, else the latest release."""
     for spec in SpecifierSet(dep.specifier):
@@ -74,15 +89,14 @@ def _resolved_version(dep: Dependency, meta: PackageMetadata | None) -> str | No
 def _repo_healths(
     metas: list[PackageMetadata | None], github: GitHubClient
 ) -> list[RepoHealth | None]:
-    """Repo health per metadata, deduplicating repeated upstream repos."""
-    cache: dict[str, RepoHealth | None] = {}
-    healths: list[RepoHealth | None] = []
-    for meta in metas:
-        repo = find_repo(meta.project_urls) if meta else None
-        if repo is None:
-            healths.append(None)
-            continue
-        if repo not in cache:
-            cache[repo] = github.repo_health(repo)
-        healths.append(cache[repo])
-    return healths
+    """Repo health per metadata, fetching each upstream repo once."""
+    repos = [find_repo(meta.project_urls) if meta else None for meta in metas]
+    unique = sorted({repo for repo in repos if repo is not None})
+    health_map: dict[str, RepoHealth | None] = {}
+    if unique:
+        with ThreadPoolExecutor(max_workers=_WORKERS) as pool:
+            for repo, health in zip(
+                unique, pool.map(github.repo_health, unique), strict=True
+            ):
+                health_map[repo] = health
+    return [health_map[repo] if repo is not None else None for repo in repos]

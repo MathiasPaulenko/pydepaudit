@@ -5,6 +5,7 @@ from typing import Any
 
 import httpx
 
+from pydepaudit.cache import FileCache
 from pydepaudit.models import PackageMetadata
 
 BASE_URL = "https://pypi.org"
@@ -13,11 +14,25 @@ BASE_URL = "https://pypi.org"
 class PyPIClient:
     """Fetch package metadata from the PyPI JSON API."""
 
-    def __init__(self, client: httpx.Client | None = None) -> None:
+    def __init__(
+        self,
+        client: httpx.Client | None = None,
+        cache: FileCache | None = None,
+    ) -> None:
         self._client = client or httpx.Client(base_url=BASE_URL, timeout=10.0)
+        self._cache = cache
 
     def package(self, name: str) -> PackageMetadata | None:
         """Return metadata for *name*, or None if it does not exist on PyPI."""
+        key = f"pypi:{name.lower()}"
+        if self._cache is not None and (cached := self._cache.get(key)) is not None:
+            return _from_cached(cached)
+        meta = self._fetch(name)
+        if self._cache is not None:
+            self._cache.set(key, _to_cached(meta))
+        return meta
+
+    def _fetch(self, name: str) -> PackageMetadata | None:
         response = self._client.get(f"/pypi/{name}/json")
         if response.status_code == 404:
             return None
@@ -40,6 +55,32 @@ class PyPIClient:
             last_release=max(timestamps) if timestamps else None,
             project_urls=info.get("project_urls") or {},
         )
+
+
+def _to_cached(meta: PackageMetadata | None) -> dict[str, Any]:
+    if meta is None:
+        return {"found": False}
+    return {
+        "found": True,
+        "name": meta.name,
+        "latest_version": meta.latest_version,
+        "license": meta.license,
+        "last_release": meta.last_release.isoformat() if meta.last_release else None,
+        "project_urls": meta.project_urls,
+    }
+
+
+def _from_cached(data: dict[str, Any]) -> PackageMetadata | None:
+    if not data.get("found"):
+        return None
+    last_release = data.get("last_release")
+    return PackageMetadata(
+        name=data["name"],
+        latest_version=data["latest_version"],
+        license=data.get("license"),
+        last_release=datetime.fromisoformat(last_release) if last_release else None,
+        project_urls=data.get("project_urls") or {},
+    )
 
 
 def _license(info: dict[str, Any]) -> str | None:

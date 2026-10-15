@@ -15,3 +15,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CVE audit via the OSV API with GHSA/CVSS severity mapping.
 - Maintainer health via the GitHub API: archived flag, last push, contributor count.
 - Findings engine with severities, `.pydepaudit.toml` config, `--fail-on` and `--license` options.
+- Local HTTP cache (1h TTL, `--no-cache` to bypass) and parallel source fetching.
