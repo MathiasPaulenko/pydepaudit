@@ -22,3 +22,23 @@ class PackageMetadata:
     license: str | None
     last_release: datetime | None
     project_urls: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class Vulnerability:
+    """A known vulnerability affecting a dependency version."""
+
+    id: str
+    summary: str
+    severity: str
+    aliases: tuple[str, ...] = ()
+    url: str = ""
+
+
+@dataclass(frozen=True)
+class AuditResult:
+    """Everything the audit found for one dependency."""
+
+    dependency: Dependency
+    metadata: PackageMetadata | None
+    vulnerabilities: list[Vulnerability] = field(default_factory=list)

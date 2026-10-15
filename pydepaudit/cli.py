@@ -6,7 +6,8 @@ from typing import Annotated
 import typer
 
 from pydepaudit import __version__, report
-from pydepaudit.parsers import parse_project
+from pydepaudit.audit import audit_project
+from pydepaudit.sources.osv import OSVClient
 from pydepaudit.sources.pypi import PyPIClient
 
 app = typer.Typer(
@@ -48,13 +49,10 @@ def check(
     ] = None,
 ) -> None:
     """Audit the dependencies of a project."""
-    deps = parse_project(Path(path))
-    if not deps:
+    results = audit_project(Path(path))
+    if not results:
         typer.echo("No dependency files found in the project.")
         raise typer.Exit(1)
-
-    client = PyPIClient()
-    results = [(dep, client.package(dep.name)) for dep in deps]
 
     if format_ == "json":
         typer.echo(report.render_json(results))
@@ -72,9 +70,15 @@ def show(
         typer.echo(f"{package} not found on PyPI.")
         raise typer.Exit(1)
 
+    vulns = OSVClient().query_batch([(meta.name, meta.latest_version)])[0]
+
     typer.echo(f"Name:          {meta.name}")
     typer.echo(f"Latest:        {meta.latest_version}")
     typer.echo(f"License:       {meta.license or 'unknown'}")
     typer.echo(f"Last release:  {meta.last_release or 'unknown'}")
+    typer.echo(f"CVEs:          {len(vulns)}")
+    for vuln in vulns:
+        aliases = ", ".join(vuln.aliases)
+        typer.echo(f"  - {vuln.id} [{vuln.severity}] {aliases} {vuln.summary}")
     for label, url in meta.project_urls.items():
         typer.echo(f"{label}: {url}")
