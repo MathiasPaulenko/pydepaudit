@@ -1,0 +1,36 @@
+name: pydepaudit
+description: >-
+  Audit Python dependencies for vulnerabilities, licenses, staleness and
+  maintainer health.
+author: MathiasPaulenko
+branding:
+  icon: shield
+  color: blue
+inputs:
+  path:
+    description: Path to the project to audit.
+    required: false
+    default: "."
+  fail-on:
+    description: Fail the step on findings at this severity or above.
+    required: false
+    default: ""
+  format:
+    description: "Output format: table, json or sarif."
+    required: false
+    default: table
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v6
+    - name: Install pydepaudit
+      shell: bash
+      run: pip install pydepaudit
+    - name: Audit dependencies
+      shell: bash
+      run: |
+        args="check ${{ inputs.path }} --format ${{ inputs.format }}"
+        if [ -n "${{ inputs.fail-on }}" ]; then
+          args="$args --fail-on ${{ inputs.fail-on }}"
+        fi
+        pydepaudit $args

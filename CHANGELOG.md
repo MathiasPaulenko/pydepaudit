@@ -42,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - OpenSSF Scorecard as an extra maintainer-health signal: repos scoring below
   `scorecard_min` (default 5.0, configurable in `.pydepaudit.toml`) produce a
   low-severity finding; `show` prints the score.
+- Composite GitHub Action (`action.yml`): `uses: MathiasPaulenko/pydepaudit@v*`.
 
 ### Fixed
 

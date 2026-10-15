@@ -73,6 +73,14 @@ One line in your pipeline:
 - run: pydepaudit check --fail-on high
 ```
 
+Or use the GitHub Action once a release tag exists:
+
+```yaml
+- uses: MathiasPaulenko/pydepaudit@v0.1
+  with:
+    fail-on: high
+```
+
 Or upload findings to GitHub code scanning:
 
 ```yaml
