@@ -27,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Vulnerability records are deduplicated by shared CVE/GHSA/PYSEC aliases and
   now carry `fixed` — the earliest version resolving the vuln — shown in the
   table and JSON output.
+- Yanked-version detection: an exact pin to a release yanked from PyPI
+  (PEP 592) produces a medium finding.
 
 ### Fixed
 

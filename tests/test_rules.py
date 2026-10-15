@@ -30,9 +30,10 @@ def _result(
     meta: PackageMetadata | None = None,
     vulns: list[Vulnerability] | None = None,
     repo: RepoHealth | None = None,
+    dep: Dependency = DEP,
 ) -> AuditResult:
     return AuditResult(
-        dependency=DEP,
+        dependency=dep,
         metadata=meta if meta is not None else _meta(),
         vulnerabilities=vulns or [],
         repo_health=repo,
@@ -123,6 +124,21 @@ def test_repo_inactive_low() -> None:
     repo = RepoHealth("u", archived=False, pushed_at=old, open_issues=0, contributors=8)
     findings = evaluate(_result(repo=repo), Config())
     assert [(f.severity, f.kind) for f in findings] == [("low", "maintainer")]
+
+
+def test_yanked_pinned_version() -> None:
+    meta = PackageMetadata("pkg", "2.0", "MIT", None, {}, yanked_versions=("1.0",))
+    result = _result(dep=Dependency("pkg", "==1.0"), meta=meta)
+    findings = evaluate(result, Config())
+    assert [(f.severity, f.kind) for f in findings] == [("medium", "yanked")]
+
+
+def test_yanked_range_not_flagged() -> None:
+    # unpinned range — yanked detection only applies to exact pins
+    meta = PackageMetadata("pkg", "2.0", "MIT", None, {}, yanked_versions=("1.0",))
+    result = _result(dep=Dependency("pkg", ">=1.0"), meta=meta)
+    findings = evaluate(result, Config())
+    assert findings == []
 
 
 def test_repo_no_push_date() -> None:

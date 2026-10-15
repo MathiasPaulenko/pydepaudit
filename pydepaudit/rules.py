@@ -3,6 +3,7 @@
 import re
 from datetime import UTC, datetime
 
+from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.utils import canonicalize_name
 
 from pydepaudit.config import Config
@@ -30,6 +31,7 @@ def evaluate(result: AuditResult, config: Config) -> list[Finding]:
     if reason := ignored.get(name):
         return [Finding("low", "ignored", f"ignored: {reason}")]
     findings = _vulnerability_findings(result)
+    findings.extend(_yanked_findings(result))
     findings.extend(_license_findings(result, config))
     findings.extend(_staleness_findings(result, config))
     findings.extend(_repo_findings(result, config))
@@ -62,6 +64,29 @@ def _vulnerability_findings(result: AuditResult) -> list[Finding]:
         message = f"{vuln.id}{label}{fixed} {vuln.summary}".strip()
         findings.append(Finding(severity, "vulnerability", message))
     return findings
+
+
+def _yanked_findings(result: AuditResult) -> list[Finding]:
+    """Flag when the exact pinned version was yanked from PyPI (PEP 592)."""
+    meta = result.metadata
+    if meta is None or not meta.yanked_versions:
+        return []
+    try:
+        pinned = next(
+            (
+                s.version
+                for s in SpecifierSet(result.dependency.specifier)
+                if s.operator in ("==", "===") and "*" not in s.version
+            ),
+            None,
+        )
+    except InvalidSpecifier:
+        return []
+    if pinned and pinned in meta.yanked_versions:
+        return [
+            Finding("medium", "yanked", f"pinned version {pinned} was yanked from PyPI")
+        ]
+    return []
 
 
 def _license_findings(result: AuditResult, config: Config) -> list[Finding]:

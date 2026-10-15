@@ -116,6 +116,23 @@ def test_corrupt_cache_falls_back_to_fetch(tmp_path: Path) -> None:
 
 
 @respx.mock
+def test_package_yanked_versions() -> None:
+    payload = {
+        "info": {"name": "t", "version": "2.0"},
+        "releases": {
+            "1.0": [{"yanked": True}, {"yanked": True}],
+            "2.0": [{"yanked": False}],
+            "3.0": [{"yanked": True}, {"yanked": False}],  # partial → not yanked
+        },
+    }
+    respx.get("https://pypi.org/pypi/t/json").mock(
+        return_value=httpx.Response(200, json=payload)
+    )
+    meta = PyPIClient().package("t")
+    assert meta is not None and meta.yanked_versions == ("1.0",)
+
+
+@respx.mock
 def test_package_free_text_license() -> None:
     payload = {
         "info": {"name": "t", "version": "1.0", "license": "BSD-3-Clause"},

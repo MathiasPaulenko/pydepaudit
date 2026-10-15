@@ -52,7 +52,9 @@ class PyPIClient:
         latest = info.get("version")
         if not isinstance(latest, str):
             latest = ""
-        releases = data.get("releases") or {}
+        releases = data.get("releases")
+        if not isinstance(releases, dict):
+            releases = {}
         files = releases.get(latest) or []
         timestamps = [
             datetime.fromisoformat(upload_time)
@@ -69,6 +71,7 @@ class PyPIClient:
             license=_license(info),
             last_release=max(timestamps) if timestamps else None,
             project_urls=urls if isinstance(urls, dict) else {},
+            yanked_versions=_yanked(releases),
         )
 
 
@@ -82,6 +85,7 @@ def _to_cached(meta: PackageMetadata | None) -> dict[str, Any]:
         "license": meta.license,
         "last_release": meta.last_release.isoformat() if meta.last_release else None,
         "project_urls": meta.project_urls,
+        "yanked_versions": list(meta.yanked_versions),
     }
 
 
@@ -95,7 +99,21 @@ def _from_cached(data: dict[str, Any]) -> PackageMetadata | None:
         license=data.get("license"),
         last_release=datetime.fromisoformat(last_release) if last_release else None,
         project_urls=data.get("project_urls") or {},
+        yanked_versions=(
+            tuple(v for v in data.get("yanked_versions") or [] if isinstance(v, str))
+        ),
     )
+
+
+def _yanked(releases: dict[str, Any]) -> tuple[str, ...]:
+    """Versions whose release files were all yanked (PEP 592)."""
+    yanked = []
+    for version, files in releases.items():
+        if not isinstance(files, list) or not files:
+            continue
+        if all(isinstance(f, dict) and f.get("yanked") for f in files):
+            yanked.append(version)
+    return tuple(yanked)
 
 
 def _license(info: dict[str, Any]) -> str | None:

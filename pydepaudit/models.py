@@ -22,6 +22,7 @@ class PackageMetadata:
     license: str | None
     last_release: datetime | None
     project_urls: dict[str, str] = field(default_factory=dict)
+    yanked_versions: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
