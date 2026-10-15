@@ -1,4 +1,4 @@
-"""Terminal and JSON reporting."""
+"""Terminal, JSON and SARIF reporting."""
 
 import json
 import sys
@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from rich.console import Console
 from rich.table import Table
 
+from pydepaudit import __version__
 from pydepaudit.models import AuditResult
 from pydepaudit.rules import active_findings, worst_severity
 
@@ -81,6 +82,68 @@ def render_json(results: list[AuditResult]) -> str:
                 }
                 for r in results
             ]
+        },
+        indent=2,
+    )
+
+
+_SARIF_LEVEL = {
+    "critical": "error",
+    "high": "error",
+    "medium": "warning",
+    "low": "note",
+}
+
+
+def render_sarif(results: list[AuditResult]) -> str:
+    """Serialize findings as SARIF 2.1.0 for GitHub code scanning upload."""
+    rules: dict[str, dict[str, object]] = {}
+    sarif_results = []
+    for result in results:
+        dep = result.dependency
+        for finding in result.findings:
+            rule_id = f"pydepaudit/{finding.kind}"
+            rules.setdefault(
+                rule_id,
+                {
+                    "id": rule_id,
+                    "name": finding.kind,
+                    "shortDescription": {"text": f"{finding.kind} finding"},
+                },
+            )
+            sarif_results.append(
+                {
+                    "ruleId": rule_id,
+                    "level": _SARIF_LEVEL.get(finding.severity, "warning"),
+                    "message": {"text": f"{dep.name}: {finding.message}"},
+                    "locations": [
+                        {"physicalLocation": {"artifactLocation": {"uri": dep.source}}}
+                    ],
+                    "properties": {
+                        "package": dep.name,
+                        "severity": finding.severity,
+                    },
+                }
+            )
+    return json.dumps(
+        {
+            "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+            "version": "2.1.0",
+            "runs": [
+                {
+                    "tool": {
+                        "driver": {
+                            "name": "pydepaudit",
+                            "version": __version__,
+                            "informationUri": (
+                                "https://github.com/MathiasPaulenko/pydepaudit"
+                            ),
+                            "rules": list(rules.values()),
+                        }
+                    },
+                    "results": sarif_results,
+                }
+            ],
         },
         indent=2,
     )

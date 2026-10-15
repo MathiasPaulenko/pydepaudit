@@ -9,7 +9,7 @@ from pydepaudit.models import (
     RepoHealth,
     Vulnerability,
 )
-from pydepaudit.report import render_json, render_table
+from pydepaudit.report import render_json, render_sarif, render_table
 
 
 def _result() -> AuditResult:
@@ -39,6 +39,25 @@ def test_render_json_structure() -> None:
 
 def test_render_json_empty() -> None:
     assert json.loads(render_json([])) == {"dependencies": []}
+
+
+def test_render_sarif() -> None:
+    data = json.loads(render_sarif([_result()]))
+    assert data["version"] == "2.1.0"
+    run = data["runs"][0]
+    assert run["tool"]["driver"]["name"] == "pydepaudit"
+    assert run["tool"]["driver"]["rules"][0]["id"] == "pydepaudit/vulnerability"
+    res = run["results"][0]
+    assert res["level"] == "error"  # high severity maps to error
+    assert "GHSA-1" in res["message"]["text"]
+    assert res["locations"][0]["physicalLocation"]["artifactLocation"]["uri"] == (
+        "requirements.txt"
+    )
+
+
+def test_render_sarif_empty() -> None:
+    data = json.loads(render_sarif([]))
+    assert data["runs"][0]["results"] == []
 
 
 def test_render_table_ignored(tmp_path) -> None:

@@ -38,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   current platform — inapplicable requirements are not audited.
 - `check --installed` audits the live environment via `importlib.metadata`
   instead of declared dependency files.
+- `--format sarif` emits SARIF 2.1.0 for GitHub code scanning upload.
 
 ### Fixed
 

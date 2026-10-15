@@ -96,6 +96,20 @@ def test_check_json(tmp_path: Path) -> None:
 
 
 @respx.mock
+def test_check_sarif(tmp_path: Path) -> None:
+    (tmp_path / "requirements.txt").write_text("requests>=2\n")
+    respx.get("https://pypi.org/pypi/requests/json").mock(
+        return_value=httpx.Response(200, json=REQUESTS_JSON)
+    )
+    respx.post("https://api.osv.dev/v1/querybatch").mock(
+        return_value=httpx.Response(200, json={"results": [{"vulns": []}]})
+    )
+    result = runner.invoke(app, ["check", str(tmp_path), "--format", "sarif"])
+    assert result.exit_code == 0
+    assert json.loads(result.output)["version"] == "2.1.0"
+
+
+@respx.mock
 def test_check_fail_on(tmp_path: Path) -> None:
     (tmp_path / "requirements.txt").write_text("requests==2.31.0\n")
     respx.get("https://pypi.org/pypi/requests/json").mock(

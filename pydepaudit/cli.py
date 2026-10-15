@@ -54,7 +54,7 @@ def check(
     ] = ".",
     format_: Annotated[
         str,
-        typer.Option("--format", "-f", help="Output format: table or json."),
+        typer.Option("--format", "-f", help="Output format: table, json or sarif."),
     ] = "table",
     fail_on: Annotated[
         str | None,
@@ -80,8 +80,11 @@ def check(
     format_ = format_.lower().strip()
     fail_on = fail_on.lower().strip() if fail_on is not None else None
     valid = ", ".join(SEVERITY_ORDER)
-    if format_ not in ("table", "json"):
-        typer.echo(f"Invalid --format '{format_}' (expected: table, json)", err=True)
+    if format_ not in ("table", "json", "sarif"):
+        typer.echo(
+            f"Invalid --format '{format_}' (expected: table, json, sarif)",
+            err=True,
+        )
         raise typer.Exit(2)
     if fail_on is not None and fail_on not in SEVERITY_ORDER:
         typer.echo(f"Invalid --fail-on '{fail_on}' (expected: {valid})", err=True)
@@ -99,13 +102,11 @@ def check(
 
     deps = installed_parsers.parse() if installed else None
     try:
-        if format_ == "json":
+        if format_ != "table":
             results = audit_project(project, config=config, cache=cache, deps=deps)
         else:
             with Console(stderr=True).status("Auditing dependencies…"):
-                results = audit_project(
-                    project, config=config, cache=cache, deps=deps
-                )
+                results = audit_project(project, config=config, cache=cache, deps=deps)
     except httpx.HTTPError as exc:
         typer.echo(f"Error contacting an upstream API: {exc}", err=True)
         raise typer.Exit(1) from exc
@@ -123,6 +124,8 @@ def check(
 
     if format_ == "json":
         typer.echo(report.render_json(results))
+    elif format_ == "sarif":
+        typer.echo(report.render_sarif(results))
     else:
         report.render_table(results)
 

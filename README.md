@@ -34,6 +34,7 @@ Requires Python 3.11+.
 ```bash
 pydepaudit check                  # audit pyproject.toml / requirements.txt / uv.lock
 pydepaudit check --format json    # machine-readable output for CI
+pydepaudit check --format sarif   # SARIF for GitHub code scanning
 pydepaudit check --fail-on high   # exit 1 on findings >= severity
 pydepaudit check --license MIT    # declare your project license for compat checks
 pydepaudit check --no-cache       # bypass the local HTTP cache
@@ -70,6 +71,14 @@ One line in your pipeline:
 
 ```yaml
 - run: pydepaudit check --fail-on high
+```
+
+Or upload findings to GitHub code scanning:
+
+```yaml
+- run: pydepaudit check --format sarif > results.sarif
+- uses: github/codeql-action/upload-sarif@v4
+  with: {sarif_file: results.sarif}
 ```
 
 Exit codes: `0` clean or below threshold, `1` findings at/above `--fail-on`, no
