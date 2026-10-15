@@ -28,9 +28,13 @@ runs:
       run: pip install pydepaudit
     - name: Audit dependencies
       shell: bash
+      env:
+        PYDEPAUDIT_PATH: ${{ inputs.path }}
+        PYDEPAUDIT_FORMAT: ${{ inputs.format }}
+        PYDEPAUDIT_FAIL_ON: ${{ inputs.fail-on }}
       run: |
-        args="check ${{ inputs.path }} --format ${{ inputs.format }}"
-        if [ -n "${{ inputs.fail-on }}" ]; then
-          args="$args --fail-on ${{ inputs.fail-on }}"
+        args=(check "$PYDEPAUDIT_PATH" --format "$PYDEPAUDIT_FORMAT")
+        if [ -n "$PYDEPAUDIT_FAIL_ON" ]; then
+          args+=(--fail-on "$PYDEPAUDIT_FAIL_ON")
         fi
-        pydepaudit $args
+        pydepaudit "${args[@]}"

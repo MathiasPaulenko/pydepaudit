@@ -2,8 +2,10 @@ import json
 from pathlib import Path
 
 import httpx
+import pytest
 import respx
 
+from pydepaudit.models import Vulnerability
 from pydepaudit.sources.osv import OSVClient
 
 
@@ -84,6 +86,67 @@ def test_query_batch_empty() -> None:
 
 
 @respx.mock
+def test_query_batch_does_not_follow_external_redirect() -> None:
+    respx.post("https://api.osv.dev/v1/querybatch").mock(
+        return_value=httpx.Response(
+            302, headers={"Location": "https://internal.example/metadata"}
+        )
+    )
+    external = respx.get("https://internal.example/metadata").mock(
+        return_value=httpx.Response(200, json={"results": []})
+    )
+    with pytest.raises(httpx.HTTPStatusError):
+        OSVClient().query_batch([("pkg", "1.0")])
+    assert external.call_count == 0
+
+
+@respx.mock
+def test_query_batch_deep_json_is_reported_as_malformed() -> None:
+    body = b'{"results":[],"deep":' + b"[" * 20000 + b"0" + b"]" * 20000 + b"}"
+    respx.post("https://api.osv.dev/v1/querybatch").mock(
+        return_value=httpx.Response(200, content=body)
+    )
+    with pytest.raises(ValueError, match="malformed OSV JSON"):
+        OSVClient().query_batch([("pkg", "1.0")])
+
+
+@respx.mock
+def test_hydration_does_not_follow_external_redirect() -> None:
+    respx.post("https://api.osv.dev/v1/querybatch").mock(
+        return_value=httpx.Response(
+            200, json={"results": [{"vulns": [{"id": "GHSA-x"}]}]}
+        )
+    )
+    respx.get("https://api.osv.dev/v1/vulns/GHSA-x").mock(
+        return_value=httpx.Response(
+            302, headers={"Location": "https://internal.example/secret"}
+        )
+    )
+    external = respx.get("https://internal.example/secret").mock(
+        return_value=httpx.Response(200, json={"id": "GHSA-x"})
+    )
+    vulns = OSVClient().query_batch([("pkg", "1.0")])[0]
+    assert len(vulns) == 1 and vulns[0].id == "GHSA-x"
+    assert external.call_count == 0
+
+
+@respx.mock
+def test_hydration_deep_json_keeps_lite_vulnerability() -> None:
+    body = b'{"id":"GHSA-x","deep":' + b"[" * 20000 + b"0" + b"]" * 20000 + b"}"
+    respx.post("https://api.osv.dev/v1/querybatch").mock(
+        return_value=httpx.Response(
+            200, json={"results": [{"vulns": [{"id": "GHSA-x"}]}]}
+        )
+    )
+    respx.get("https://api.osv.dev/v1/vulns/GHSA-x").mock(
+        return_value=httpx.Response(200, content=body)
+    )
+    vulns = OSVClient().query_batch([("pkg", "1.0")])[0]
+    assert len(vulns) == 1 and vulns[0].id == "GHSA-x"
+    assert vulns[0].summary == ""
+
+
+@respx.mock
 def test_query_batch_hydrates_lite_records() -> None:
     # real querybatch responses only carry id+modified; details come from /vulns/{id}
     respx.post("https://api.osv.dev/v1/querybatch").mock(
@@ -106,7 +169,12 @@ def test_query_batch_hydrates_lite_records() -> None:
                         "ranges": [
                             {
                                 "type": "ECOSYSTEM",
-                                "events": [{"introduced": "0"}, {"fixed": "1.2.3"}],
+                                "events": [
+                                    {"introduced": "0"},
+                                    {"fixed": None},
+                                    {"fixed": 7},
+                                    {"fixed": "1.2.3"},
+                                ],
                             }
                         ],
                     }
@@ -254,6 +322,195 @@ def test_query_batch_chunks_large_inputs() -> None:
     results = OSVClient().query_batch(packages)
     assert route.call_count == 2
     assert results == [[]] * 501
+
+
+@respx.mock
+def test_query_batch_malformed_payload() -> None:
+    # a non-dict response body must not crash with AttributeError
+    respx.post("https://api.osv.dev/v1/querybatch").mock(
+        return_value=httpx.Response(200, json=[{"vulns": []}])
+    )
+    assert OSVClient().query_batch([("a", "1.0")]) == [[]]
+
+
+@respx.mock
+def test_query_batch_per_chunk_alignment() -> None:
+    # a short result list mid-stream must not shift later chunks' mappings
+    calls = iter(
+        [
+            httpx.Response(200, json={"results": [{"vulns": []}]}),  # 1 of 500
+            httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {
+                            "vulns": [
+                                {
+                                    "id": "GHSA-z",
+                                    "summary": "late",
+                                    "database_specific": {"severity": "LOW"},
+                                }
+                            ]
+                        }
+                    ]
+                },
+            ),
+        ]
+    )
+    respx.post("https://api.osv.dev/v1/querybatch").mock(
+        side_effect=lambda request: next(calls)
+    )
+    packages = [("a", "1.0")] * 501
+    results = OSVClient().query_batch(packages)
+    assert len(results) == 501
+    assert results[0] == [] and results[499] == []
+    assert results[500][0].id == "GHSA-z"  # stays aligned to its package
+
+
+@respx.mock
+def test_query_batch_bad_json_in_hydration() -> None:
+    respx.post("https://api.osv.dev/v1/querybatch").mock(
+        return_value=httpx.Response(
+            200, json={"results": [{"vulns": [{"id": "GHSA-x"}]}]}
+        )
+    )
+    respx.get("https://api.osv.dev/v1/vulns/GHSA-x").mock(
+        return_value=httpx.Response(200, content=b"<html>not json</html>")
+    )
+    vulns = OSVClient().query_batch([("pkg", "1.0")])[0]
+    assert len(vulns) == 1
+    assert vulns[0].id == "GHSA-x"
+    assert vulns[0].severity == "unknown"
+
+
+@respx.mock
+def test_query_batch_transitive_alias_merge() -> None:
+    # V3 bridges two separate groups via aliases — all three must merge
+    respx.post("https://api.osv.dev/v1/querybatch").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "vulns": [
+                            {"id": "GHSA-a", "summary": "v1", "aliases": ["CVE-1"]},
+                            {"id": "GHSA-b", "summary": "v2", "aliases": ["CVE-2"]},
+                            {
+                                "id": "GHSA-c",
+                                "summary": "v3",
+                                "aliases": ["CVE-2", "CVE-1"],
+                            },
+                        ]
+                    }
+                ]
+            },
+        )
+    )
+    vulns = OSVClient().query_batch([("pkg", "1.0")])[0]
+    assert len(vulns) == 1
+    assert vulns[0].id == "GHSA-a"
+    assert set(vulns[0].aliases) == {"CVE-1", "GHSA-b", "CVE-2", "GHSA-c"}
+
+
+def test_merge_vulnerability_uses_valid_id_without_duplicate_alias() -> None:
+    from pydepaudit.sources.osv import _merge_vuln
+
+    merged = _merge_vuln(
+        Vulnerability("", "summary", "low"),
+        Vulnerability("GHSA-1", "summary", "high"),
+    )
+    assert merged.id == "GHSA-1"
+    assert "GHSA-1" not in merged.aliases
+
+
+@respx.mock
+def test_query_batch_skips_vuln_records_without_id() -> None:
+    respx.post("https://api.osv.dev/v1/querybatch").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "vulns": [
+                            {"id": "GHSA-1", "summary": "full record"},
+                            {"id": 7, "summary": "invalid numeric identifier"},
+                            {"summary": "no id"},
+                            "junk",
+                        ]
+                    }
+                ]
+            },
+        )
+    )
+    vulns = OSVClient().query_batch([("pkg", "1.0")])[0]
+    assert [v.id for v in vulns] == ["GHSA-1"]
+
+
+@respx.mock
+def test_query_batch_invalid_vuln_id_keeps_lite() -> None:
+    # a control char in the id would raise httpx.InvalidURL — keep lite record
+    respx.post("https://api.osv.dev/v1/querybatch").mock(
+        return_value=httpx.Response(
+            200, json={"results": [{"vulns": [{"id": "GHSA-x\x00"}]}]}
+        )
+    )
+    vulns = OSVClient().query_batch([("pkg", "1.0")])[0]
+    assert len(vulns) == 1
+    assert vulns[0].severity == "unknown"
+
+
+@respx.mock
+def test_query_batch_ignores_mismatched_hydration_id() -> None:
+    respx.post("https://api.osv.dev/v1/querybatch").mock(
+        return_value=httpx.Response(
+            200, json={"results": [{"vulns": [{"id": "GHSA-original"}]}]}
+        )
+    )
+    respx.get("https://api.osv.dev/v1/vulns/GHSA-original").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "GHSA-different",
+                "summary": "wrong record",
+                "database_specific": {"severity": "CRITICAL"},
+            },
+        )
+    )
+    vuln = OSVClient().query_batch([("pkg", "1.0")])[0][0]
+    assert vuln.id == "GHSA-original"
+    assert vuln.summary == ""
+    assert vuln.severity == "unknown"
+
+
+@respx.mock
+def test_severity_non_dict_database_specific() -> None:
+    respx.post("https://api.osv.dev/v1/querybatch").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "vulns": [
+                            {
+                                "id": "PYSEC-9",
+                                "summary": "x",
+                                "database_specific": "weird-string",
+                                "severity": [
+                                    {
+                                        "type": "CVSS_V3",
+                                        "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N"
+                                        "/S:U/C:H/I:H/A:H",
+                                    }
+                                ],
+                            }
+                        ]
+                    }
+                ]
+            },
+        )
+    )
+    vuln = OSVClient().query_batch([("a", "1.0")])[0][0]
+    assert vuln.severity == "critical"  # falls back to CVSS vector
 
 
 @respx.mock

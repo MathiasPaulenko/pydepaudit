@@ -2,14 +2,22 @@ import json
 from pathlib import Path
 
 import httpx
+import pytest
 import respx
 from typer.testing import CliRunner
 
-from pydepaudit import __version__
+from pydepaudit import __version__, cli
+from pydepaudit.cache import FileCache
 from pydepaudit.cli import app
 from pydepaudit.models import Dependency
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_cli_cache(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(cli, "default_cache_dir", lambda: tmp_path / "cache")
+
 
 REQUESTS_JSON = {
     "info": {
@@ -245,6 +253,17 @@ def test_show_network_error() -> None:
 
 
 @respx.mock
+def test_show_malformed_upstream_json_is_clean_error() -> None:
+    respx.get("https://pypi.org/pypi/x/json").mock(
+        return_value=httpx.Response(200, content=b"{not json")
+    )
+    result = runner.invoke(app, ["show", "x"])
+    assert result.exit_code == 1
+    assert "Invalid response from an upstream API" in result.output
+    assert "Traceback" not in result.output
+
+
+@respx.mock
 def test_show_full_output() -> None:
     payload = {
         "info": {
@@ -290,9 +309,9 @@ def test_show_full_output() -> None:
     respx.get("https://api.github.com/repos/owner/repo/contributors").mock(
         return_value=httpx.Response(200, json=[{"login": "a"}])
     )
-    respx.get(
-        "https://api.securityscorecards.dev/projects/github.com/owner/repo"
-    ).mock(return_value=httpx.Response(200, json={"score": 7.8}))
+    respx.get("https://api.securityscorecards.dev/projects/github.com/owner/repo").mock(
+        return_value=httpx.Response(200, json={"score": 7.8})
+    )
     result = runner.invoke(app, ["show", "pkg"])
     assert result.exit_code == 0
     assert "GHSA-1 [high] CVE-1" in result.output
@@ -301,6 +320,19 @@ def test_show_full_output() -> None:
 
 
 @respx.mock
+def test_check_installed_corrupt_env(tmp_path: Path, monkeypatch) -> None:
+    # a corrupt site-packages (dist.metadata raises) must exit cleanly
+    from pydepaudit.parsers import installed as installed_parsers
+
+    def boom() -> list:
+        raise OSError("corrupt dist-info")
+
+    monkeypatch.setattr(installed_parsers, "parse", boom)
+    result = runner.invoke(app, ["check", str(tmp_path), "--installed"])
+    assert result.exit_code == 1
+    assert "corrupt dist-info" in result.output
+
+
 def test_check_installed(tmp_path: Path, monkeypatch) -> None:
     from pydepaudit.parsers import installed as installed_parsers
 
@@ -365,7 +397,9 @@ def test_check_with_repo_health(tmp_path: Path) -> None:
 
 
 def test_check_license_override(tmp_path: Path) -> None:
-    (tmp_path / ".pydepaudit.toml").write_text("stale_months = 999\n")
+    (tmp_path / ".pydepaudit.toml").write_text(
+        "stale_months = 999\nstale_medium_months = 1000\n"
+    )
     (tmp_path / "requirements.txt").write_text("")
     result = runner.invoke(app, ["check", str(tmp_path), "--license", "MIT"])
     assert result.exit_code == 1  # no deps found, but override parsed fine
@@ -424,3 +458,109 @@ def test_check_skips_unresolvable(tmp_path: Path) -> None:
     result = runner.invoke(app, ["check", str(tmp_path)])
     assert result.exit_code == 0
     assert "not on PyPI" in result.output
+
+
+@respx.mock
+def test_check_does_not_trust_project_local_cache(tmp_path: Path, monkeypatch) -> None:
+    FileCache(tmp_path / ".pydepaudit-cache").set("pypi:ghost", {"found": False})
+    user_cache = tmp_path / "user-cache"
+    monkeypatch.setattr(cli, "default_cache_dir", lambda: user_cache)
+    (tmp_path / "requirements.txt").write_text("ghost\n")
+    pypi_route = respx.get("https://pypi.org/pypi/ghost/json").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "info": {
+                    "name": "ghost",
+                    "version": "1.0",
+                    "license_expression": "MIT",
+                    "project_urls": {},
+                },
+                "releases": {"1.0": []},
+            },
+        )
+    )
+    respx.post("https://api.osv.dev/v1/querybatch").mock(
+        return_value=httpx.Response(200, json={"results": [{"vulns": []}]})
+    )
+    result = runner.invoke(app, ["check", str(tmp_path)])
+    assert result.exit_code == 0
+    assert pypi_route.call_count == 1
+    assert "not on PyPI" not in result.output
+    assert any(user_cache.iterdir())
+
+
+@respx.mock
+def test_check_continues_without_available_user_cache(
+    tmp_path: Path, monkeypatch
+) -> None:
+    def no_cache_dir() -> Path:
+        raise OSError("home directory unavailable")
+
+    monkeypatch.setattr(cli, "default_cache_dir", no_cache_dir)
+    (tmp_path / "requirements.txt").write_text("ghostpkg\n")
+    respx.get("https://pypi.org/pypi/ghostpkg/json").mock(
+        return_value=httpx.Response(404)
+    )
+    result = runner.invoke(app, ["check", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "not on PyPI" in result.output
+
+
+@respx.mock
+def test_check_invalid_specifier_falls_back(tmp_path: Path, monkeypatch) -> None:
+    # a malformed pin in a lock file must not abort the whole audit
+    import pydepaudit.parsers as parsers_pkg
+
+    def bad_parse(path):
+        return [Dependency("Requests", "==1.0 oops", "uv.lock")]
+
+    monkeypatch.setattr(parsers_pkg, "_PARSERS", [("uv.lock", bad_parse)])
+    (tmp_path / "uv.lock").write_text("x = 1")
+    respx.get("https://pypi.org/pypi/requests/json").mock(
+        return_value=httpx.Response(200, json=REQUESTS_JSON)
+    )
+    osv_route = respx.post("https://api.osv.dev/v1/querybatch").mock(
+        return_value=httpx.Response(200, json={"results": [{"vulns": []}]})
+    )
+    result = runner.invoke(app, ["check", str(tmp_path)])
+    assert result.exit_code == 0
+    # invalid specifier → audited against the latest release instead
+    body = json.loads(osv_route.calls.last.request.content)
+    assert body["queries"][0]["version"] == "2.32.3"
+    assert body["queries"][0]["package"]["name"] == "requests"  # PyPI canonical name
+
+
+@respx.mock
+def test_check_keeps_distinct_pins_for_same_package(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import pydepaudit.parsers as parsers_pkg
+
+    monkeypatch.setattr(
+        parsers_pkg,
+        "_PARSERS",
+        [
+            (
+                "uv.lock",
+                lambda path: [
+                    Dependency("requests", "==1.0"),
+                    Dependency("Requests", "==2.0"),
+                    Dependency("REQUESTS", "==1.0"),
+                ],
+            )
+        ],
+    )
+    (tmp_path / "uv.lock").write_text("x = 1")
+    respx.get("https://pypi.org/pypi/requests/json").mock(
+        return_value=httpx.Response(200, json=REQUESTS_JSON)
+    )
+    osv_route = respx.post("https://api.osv.dev/v1/querybatch").mock(
+        return_value=httpx.Response(
+            200, json={"results": [{"vulns": []}, {"vulns": []}]}
+        )
+    )
+    result = runner.invoke(app, ["check", str(tmp_path)])
+    assert result.exit_code == 0
+    payload = json.loads(osv_route.calls.last.request.content)
+    assert [q["version"] for q in payload["queries"]] == ["1.0", "2.0"]

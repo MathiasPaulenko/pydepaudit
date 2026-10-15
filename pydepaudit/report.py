@@ -1,17 +1,37 @@
 """Terminal, JSON and SARIF reporting."""
 
+import contextlib
 import json
+import re
 import sys
 from datetime import UTC, datetime
+from urllib.parse import quote
 
 from rich.console import Console
 from rich.table import Table
+from rich.text import Text
 
 from pydepaudit import __version__
 from pydepaudit.models import AuditResult
 from pydepaudit.rules import active_findings, worst_severity
 
 _ICONS = {"fail": "🔴", "warn": "⚠️", "ok": "✅"}
+
+# control chars, ANSI escapes and bidi/zero-width marks — dep names and OSV
+# summaries are untrusted text and could otherwise inject escape sequences
+_UNSAFE_RE = re.compile(
+    r"[\x00-\x1f\x7f-\x9f\u061c\ufeff\u200b-\u200f\u202a-\u202e\u2066-\u206f]"
+)
+
+
+def _sanitize(text: str) -> str:
+    """Strip characters that could corrupt or hijack a terminal."""
+    clean = _UNSAFE_RE.sub("", str(text))
+    encoding = getattr(sys.stdout, "encoding", None)
+    if encoding:
+        with contextlib.suppress(LookupError):
+            clean = clean.encode(encoding, "backslashreplace").decode(encoding)
+    return clean
 
 
 def render_table(results: list[AuditResult]) -> None:
@@ -26,7 +46,10 @@ def render_table(results: list[AuditResult]) -> None:
     for result in results:
         dep = result.dependency
         table.add_row(
-            dep.name, dep.specifier or "-", _icon(_status(result)), _details(result)
+            Text(_sanitize(dep.name)),
+            Text(_sanitize(dep.specifier or "-")),
+            Text(_icon(_status(result))),
+            Text(_details(result)),
         )
     console.print(table)
 
@@ -60,6 +83,22 @@ def render_json(results: list[AuditResult]) -> str:
                         if r.metadata and r.metadata.last_release
                         else None
                     ),
+                    "repo_health": (
+                        {
+                            "url": r.repo_health.url,
+                            "archived": r.repo_health.archived,
+                            "pushed_at": (
+                                r.repo_health.pushed_at.isoformat()
+                                if r.repo_health.pushed_at
+                                else None
+                            ),
+                            "open_issues": r.repo_health.open_issues,
+                            "contributors": r.repo_health.contributors,
+                            "scorecard": r.repo_health.scorecard,
+                        }
+                        if r.repo_health
+                        else None
+                    ),
                     "vulnerabilities": [
                         {
                             "id": v.id,
@@ -84,6 +123,7 @@ def render_json(results: list[AuditResult]) -> str:
             ]
         },
         indent=2,
+        allow_nan=False,
     )
 
 
@@ -111,20 +151,21 @@ def render_sarif(results: list[AuditResult]) -> str:
                     "shortDescription": {"text": f"{finding.kind} finding"},
                 },
             )
-            sarif_results.append(
-                {
-                    "ruleId": rule_id,
-                    "level": _SARIF_LEVEL.get(finding.severity, "warning"),
-                    "message": {"text": f"{dep.name}: {finding.message}"},
-                    "locations": [
-                        {"physicalLocation": {"artifactLocation": {"uri": dep.source}}}
-                    ],
-                    "properties": {
-                        "package": dep.name,
-                        "severity": finding.severity,
-                    },
-                }
-            )
+            sarif_result: dict[str, object] = {
+                "ruleId": rule_id,
+                "level": _SARIF_LEVEL.get(finding.severity, "warning"),
+                "message": {"text": f"{dep.name}: {finding.message}"},
+                "properties": {
+                    "package": dep.name,
+                    "severity": finding.severity,
+                },
+            }
+            uri = _artifact_uri(dep.source)
+            if uri:
+                sarif_result["locations"] = [
+                    {"physicalLocation": {"artifactLocation": {"uri": uri}}}
+                ]
+            sarif_results.append(sarif_result)
     return json.dumps(
         {
             "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
@@ -161,6 +202,13 @@ def _status(result: AuditResult) -> str:
     return "ok"
 
 
+def _artifact_uri(source: str) -> str | None:
+    """Encode a source filename as a valid SARIF URI; installed is not a file."""
+    if not source or source == "installed":
+        return None
+    return quote(source.replace("\\", "/"), safe="/:@-._~")
+
+
 def _utf8() -> bool:
     """Whether stdout can render non-ASCII characters."""
     encoding = getattr(sys.stdout, "encoding", None) or ""
@@ -182,7 +230,7 @@ _MAX_DETAILS = 4
 def _details(result: AuditResult) -> str:
     ignored = [f for f in result.findings if f.kind == "ignored"]
     if ignored:
-        return ignored[0].message
+        return _sanitize(ignored[0].message)
 
     meta = result.metadata
     if meta is None:
@@ -191,12 +239,12 @@ def _details(result: AuditResult) -> str:
     sep = _sep()
     findings = active_findings(result)
     if findings:
-        shown = sep.join(f.message for f in findings[:_MAX_DETAILS])
+        shown = sep.join(_sanitize(f.message) for f in findings[:_MAX_DETAILS])
         remaining = len(findings) - _MAX_DETAILS
         return shown if remaining <= 0 else f"{shown}{sep}+{remaining} more"
 
     license_ = meta.license or "unknown license"
-    parts = ["no CVEs", license_, _age(meta.last_release)]
+    parts = ["no CVEs", _sanitize(license_), _age(meta.last_release)]
     if result.repo_health and result.repo_health.contributors is not None:
         parts.append(f"{result.repo_health.contributors} contributors")
     return sep.join(parts)

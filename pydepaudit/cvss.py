@@ -21,13 +21,47 @@ _PR: dict[str, dict[str, float]] = {
     "C": {"N": 0.85, "L": 0.68, "H": 0.5},
 }
 
+_VALID_VALUES = {
+    **{name: frozenset(values) for name, values in _METRICS.items()},
+    "PR": frozenset("NLH"),
+    "S": frozenset("UC"),
+    "E": frozenset("XHFPU"),
+    "RL": frozenset("XUTWO"),
+    "RC": frozenset("XCRU"),
+    "CR": frozenset("XHML"),
+    "IR": frozenset("XHML"),
+    "AR": frozenset("XHML"),
+    "MAV": frozenset("XNALP"),
+    "MAC": frozenset("XLH"),
+    "MPR": frozenset("XNLH"),
+    "MUI": frozenset("XNR"),
+    "MS": frozenset("XUC"),
+    "MC": frozenset("XHLN"),
+    "MI": frozenset("XHLN"),
+    "MA": frozenset("XHLN"),
+}
+
 
 def base_score(vector: str) -> float | None:
     """Return the CVSS v3.x base score for *vector*, or None if invalid."""
-    parts = vector.strip().split("/")
-    if not parts[0].startswith("CVSS:3"):
+    if not isinstance(vector, str):
         return None
-    metrics = dict(part.split(":", 1) for part in parts[1:] if ":" in part)
+    parts = vector.strip().split("/")
+    if not parts or parts[0] not in ("CVSS:3.0", "CVSS:3.1"):
+        return None
+    metrics: dict[str, str] = {}
+    for part in parts[1:]:
+        key, sep, value = part.partition(":")
+        if (
+            not sep
+            or not key
+            or not value
+            or key in metrics
+            or key not in _VALID_VALUES
+            or value not in _VALID_VALUES[key]
+        ):
+            return None
+        metrics[key] = value
     try:
         scope = metrics["S"]
         if scope not in _PR:
@@ -72,7 +106,8 @@ def severity_band(score: float | None) -> str:
 
 def _roundup(value: float) -> float:
     """CVSS spec roundup: smallest 1-decimal number >= value."""
-    scaled = round(value * 100000)
+    # round-half-up, matching the spec's reference implementation
+    scaled = math.floor(value * 100000 + 0.5)
     if scaled % 10000 == 0:
         return scaled / 100000
     return (math.floor(scaled / 10000) + 1) / 10

@@ -1,5 +1,6 @@
 """Command-line interface for pydepaudit."""
 
+import contextlib
 import io
 import sys
 from dataclasses import replace
@@ -12,9 +13,10 @@ from rich.console import Console
 
 from pydepaudit import __version__, report
 from pydepaudit.audit import audit_project
-from pydepaudit.cache import FileCache
+from pydepaudit.cache import FileCache, default_cache_dir
 from pydepaudit.config import load
 from pydepaudit.parsers import installed as installed_parsers
+from pydepaudit.report import _sanitize
 from pydepaudit.rules import SEVERITY_ORDER, active_findings
 from pydepaudit.sources.github import GitHubClient, find_repo
 from pydepaudit.sources.osv import OSVClient
@@ -98,10 +100,13 @@ def check(
         raise typer.Exit(2) from exc
     if license_:
         config = replace(config, project_license=license_)
-    cache = None if no_cache else FileCache(project / ".pydepaudit-cache")
+    cache = None
+    if not no_cache:
+        with contextlib.suppress(OSError, RuntimeError):
+            cache = FileCache(default_cache_dir())
 
-    deps = installed_parsers.parse() if installed else None
     try:
+        deps = installed_parsers.parse() if installed else None
         if format_ != "table":
             results = audit_project(project, config=config, cache=cache, deps=deps)
         else:
@@ -150,7 +155,7 @@ def show(
     try:
         meta = pypi.package(package)
         if meta is None:
-            typer.echo(f"{package} not found on PyPI.")
+            typer.echo(f"{_sanitize(package)} not found on PyPI.")
             raise typer.Exit(1)
 
         batch = osv.query_batch([(meta.name, meta.latest_version)])
@@ -160,20 +165,26 @@ def show(
     except httpx.HTTPError as exc:
         typer.echo(f"Error contacting an upstream API: {exc}", err=True)
         raise typer.Exit(1) from exc
+    except ValueError as exc:
+        typer.echo(f"Invalid response from an upstream API: {exc}", err=True)
+        raise typer.Exit(1) from exc
     finally:
         for client in (pypi, osv, github):
             client.close()
 
-    typer.echo(f"Name:          {meta.name}")
-    typer.echo(f"Latest:        {meta.latest_version}")
-    typer.echo(f"License:       {meta.license or 'unknown'}")
+    typer.echo(f"Name:          {_sanitize(meta.name)}")
+    typer.echo(f"Latest:        {_sanitize(meta.latest_version)}")
+    typer.echo(f"License:       {_sanitize(meta.license or 'unknown')}")
     typer.echo(f"Last release:  {meta.last_release or 'unknown'}")
     typer.echo(f"CVEs:          {len(vulns)}")
     for vuln in vulns:
         aliases = ", ".join(vuln.aliases)
-        typer.echo(f"  - {vuln.id} [{vuln.severity}] {aliases} {vuln.summary}")
+        typer.echo(
+            f"  - {_sanitize(vuln.id)} [{vuln.severity}] "
+            f"{_sanitize(aliases)} {_sanitize(vuln.summary)}"
+        )
     if health:
-        typer.echo(f"Repo:          {health.url}")
+        typer.echo(f"Repo:          {_sanitize(health.url)}")
         typer.echo(f"Archived:      {health.archived}")
         typer.echo(f"Last push:     {health.pushed_at or 'unknown'}")
         typer.echo(f"Open issues:   {health.open_issues}")
@@ -182,4 +193,4 @@ def show(
         rated = f"{score:.1f}/10" if score is not None else "unrated"
         typer.echo(f"Scorecard:     {rated}")
     for label, url in meta.project_urls.items():
-        typer.echo(f"{label}: {url}")
+        typer.echo(f"{_sanitize(label)}: {_sanitize(url)}")

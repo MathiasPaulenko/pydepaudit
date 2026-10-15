@@ -5,8 +5,12 @@ Python port of the official FIRST/Red Hat reference implementation
 severity-distance interpolation.
 """
 
-import math
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
+
+# nudges values like 1.4499999999999993 past the rounding boundary, matching the
+# reference implementation's EPSILON
+_EPSILON = 1e-6
 
 # --- metric severity levels (cvss_score.js) ---------------------------------
 
@@ -40,6 +44,31 @@ _BASE_VALUES: dict[str, frozenset[str]] = {
     "SC": frozenset("HLN"),
     "SI": frozenset("HLN"),
     "SA": frozenset("HLN"),
+}
+
+# optional metrics (threat, environmental, supplemental) with their valid values
+_OPTIONAL_VALUES: dict[str, frozenset[str]] = {
+    "E": frozenset("XAPU"),
+    "CR": frozenset("XHML"),
+    "IR": frozenset("XHML"),
+    "AR": frozenset("XHML"),
+    "MAV": frozenset("XNALP"),
+    "MAC": frozenset("XLH"),
+    "MAT": frozenset("XNP"),
+    "MPR": frozenset("XNLH"),
+    "MUI": frozenset("XNPA"),
+    "MVC": frozenset("XHLN"),
+    "MVI": frozenset("XHLN"),
+    "MVA": frozenset("XHLN"),
+    "MSC": frozenset("XHLN"),
+    "MSI": frozenset("XSHLN"),
+    "MSA": frozenset("XSHLN"),
+    "S": frozenset("XNP"),
+    "AU": frozenset("XNY"),
+    "R": frozenset("XAUI"),
+    "V": frozenset("XDC"),
+    "RE": frozenset("XLMH"),
+    "U": frozenset({"X", "Clear", "Green", "Amber", "Red"}),
 }
 
 # macrovector score lookup (cvss_lookup.js)
@@ -389,14 +418,21 @@ def base_score_v4(vector: str) -> float | None:
 
 
 def _parse(vector: str) -> dict[str, str] | None:
+    if not isinstance(vector, str):
+        return None
     parts = vector.strip().split("/")
     if not parts or parts[0] != "CVSS:4.0":
         return None
     metrics: dict[str, str] = {}
     for part in parts[1:]:
-        if ":" not in part:
-            continue
-        key, _, value = part.partition(":")
+        key, sep, value = part.partition(":")
+        # strict: malformed fields, duplicates, unknown keys and bad values
+        # invalidate the whole vector (matching the reference implementation)
+        if not sep or not key or not value or key in metrics:
+            return None
+        allowed = _BASE_VALUES.get(key) or _OPTIONAL_VALUES.get(key)
+        if allowed is None or value not in allowed:
+            return None
         metrics[key] = value
     for required in _BASE_REQUIRED:
         if metrics.get(required) not in _BASE_VALUES[required]:
@@ -411,9 +447,13 @@ def _m(metrics: dict[str, str], name: str) -> str:
         return "A"
     if name in ("CR", "IR", "AR") and value == "X":
         return "H"
-    modified = metrics.get("M" + name, "X")
-    if modified != "X":
-        return modified
+    if name in ("MSI", "MSA"):
+        # X means "not overridden": fall back to the base SI/SA value
+        return metrics[name[1:]] if value == "X" else value
+    if name in _BASE_VALUES:
+        modified = metrics.get("M" + name, "X")
+        if modified != "X":
+            return modified
     return value
 
 
@@ -553,9 +593,15 @@ def _interpolate(metrics: dict[str, str], macro: str) -> float:
         depth = depths[group]
         if lower_score is None or not depth:
             continue
+        available = value - lower_score
+        if available < 0:
+            continue
         proportion = current[group] / depth
-        normalized.append((value - lower_score) * proportion)
+        normalized.append(available * proportion)
 
     mean_distance = sum(normalized) / len(normalized) if normalized else 0
     value = max(0.0, min(10.0, value - mean_distance))
-    return math.floor(value * 10 + 0.5) / 10
+    # CVSS rounds half-up to one decimal; the epsilon absorbs float noise
+    return float(
+        Decimal(value + _EPSILON).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
+    )

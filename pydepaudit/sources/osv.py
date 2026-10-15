@@ -35,7 +35,7 @@ class OSVClient:
         cache: FileCache | None = None,
     ) -> None:
         self._client = client or httpx.Client(
-            base_url=BASE_URL, timeout=15.0, follow_redirects=True
+            base_url=BASE_URL, timeout=15.0, follow_redirects=False
         )
         self._cache = cache
 
@@ -57,14 +57,35 @@ class OSVClient:
                 {"package": {"name": name, "ecosystem": _ECOSYSTEM}, "version": ver}
                 for name, ver in chunk
             ]
-            response = self._client.post("/v1/querybatch", json={"queries": queries})
-            response.raise_for_status()
-            results = response.json().get("results") or []
-            all_raw.extend(
-                [v for v in (r.get("vulns") or []) if isinstance(v, dict)]
-                for r in results
+            response = self._client.post(
+                "/v1/querybatch",
+                json={"queries": queries},
+                follow_redirects=False,
             )
-        all_raw.extend([] for _ in range(len(packages) - len(all_raw)))
+            response.raise_for_status()
+            try:
+                payload = response.json()
+            except (ValueError, RecursionError) as exc:
+                raise ValueError("malformed OSV JSON response") from exc
+            results = payload.get("results") if isinstance(payload, dict) else None
+            if not isinstance(results, list):
+                results = []
+            # align per chunk: extra results are dropped, missing ones padded —
+            # keeps positional mapping even if the API misbehaves
+            for r in results[: len(chunk)]:
+                vulns = r.get("vulns") if isinstance(r, dict) else None
+                all_raw.append(
+                    [
+                        v
+                        for v in vulns
+                        if isinstance(v, dict)
+                        and isinstance(v.get("id"), str)
+                        and v["id"]
+                    ]
+                    if isinstance(vulns, list)
+                    else []
+                )
+            all_raw.extend([] for _ in range(len(chunk) - len(results)))
         details = self._hydrate(all_raw)
         return [
             _dedupe_vulns(
@@ -98,18 +119,28 @@ class OSVClient:
 
     def _fetch_vuln(self, vuln_id: str) -> dict[str, Any] | None:
         key = f"osv:{vuln_id.lower()}"
-        if self._cache is not None and (cached := self._cache.get(key)) is not None:
-            return cached if isinstance(cached, dict) else None
+        if (
+            self._cache is not None
+            and (cached := self._cache.get(key)) is not None
+            and isinstance(cached, dict)
+            and cached.get("id") == vuln_id
+        ):
+            return cached
         try:
-            response = self._client.get(f"/v1/vulns/{vuln_id}")
+            response = self._client.get(
+                f"/v1/vulns/{vuln_id}",
+                follow_redirects=False,
+            )
             if response.status_code != 200:
                 return None
             doc = response.json()
-        except httpx.HTTPError:
+        except (httpx.HTTPError, httpx.InvalidURL, ValueError, RecursionError):
             return None  # keep the lite record rather than failing the audit
-        if isinstance(doc, dict) and self._cache is not None:
+        if not isinstance(doc, dict) or doc.get("id") != vuln_id:
+            return None
+        if self._cache is not None:
             self._cache.set(key, doc)
-        return doc if isinstance(doc, dict) else None
+        return doc
 
 
 # severities ranked for merging duplicates (worst wins)
@@ -119,22 +150,38 @@ _SEVERITY_RANK = ("unknown", "none", "low", "medium", "high", "critical")
 def _dedupe_vulns(vulns: list[Vulnerability]) -> list[Vulnerability]:
     """Merge records describing the same vulnerability (shared id or alias)."""
     index_of: dict[str, int] = {}
-    kept: list[Vulnerability] = []
+    kept: list[Vulnerability | None] = []
     for vuln in vulns:
         identifiers = {vuln.id, *vuln.aliases} - {""}
-        hit = next((index_of[i] for i in identifiers if i in index_of), None)
-        if hit is None:
+        # all groups this vuln is linked to — a record bridging two groups
+        # must merge both, not just the first one found
+        hits = {index_of[i] for i in identifiers if i in index_of}
+        if not hits:
             kept.append(vuln)
-            hit = len(kept) - 1
+            idx = len(kept) - 1
         else:
-            kept[hit] = _merge_vuln(kept[hit], vuln)
+            idx = min(hits)
+            for other in sorted(hits - {idx}):
+                other_vuln = kept[other]
+                if other_vuln is None:
+                    raise RuntimeError("vulnerability index points to a merged record")
+                vuln = _merge_vuln(other_vuln, vuln)
+                kept[other] = None
+            primary = kept[idx]
+            if primary is None:
+                raise RuntimeError("vulnerability index points to a merged record")
+            kept[idx] = _merge_vuln(primary, vuln)
+            for identifier, group in index_of.items():
+                if group in hits:
+                    index_of[identifier] = idx
         for identifier in identifiers:
-            index_of[identifier] = hit
-    return kept
+            index_of[identifier] = idx
+    return [v for v in kept if v is not None]
 
 
 def _merge_vuln(a: Vulnerability, b: Vulnerability) -> Vulnerability:
     """Merge duplicate record *b* into *a*: worst severity, union of aliases."""
+    vuln_id = a.id or b.id
     aliases = tuple(dict.fromkeys((*a.aliases, b.id, *b.aliases))) or ()
     severity = (
         b.severity
@@ -142,10 +189,10 @@ def _merge_vuln(a: Vulnerability, b: Vulnerability) -> Vulnerability:
         else a.severity
     )
     return Vulnerability(
-        id=a.id,
+        id=vuln_id,
         summary=a.summary or b.summary,
         severity=severity,
-        aliases=tuple(x for x in aliases if x != a.id),
+        aliases=tuple(x for x in aliases if x and x != vuln_id),
         url=a.url or b.url,
         fixed=_min_version(a.fixed, b.fixed),
     )
@@ -164,9 +211,13 @@ def _vulnerability(data: dict[str, Any], package_name: str = "") -> Vulnerabilit
     summary = data.get("summary")
     return Vulnerability(
         id=vuln_id,
-        summary=str(summary) if summary else "",
+        summary=summary if isinstance(summary, str) else "",
         severity=_severity(data),
-        aliases=tuple(str(a) for a in aliases) if isinstance(aliases, list) else (),
+        aliases=(
+            tuple(a for a in aliases if isinstance(a, str) and a)
+            if isinstance(aliases, list)
+            else ()
+        ),
         url=f"https://osv.dev/vulnerability/{vuln_id}" if vuln_id else "",
         fixed=_fixed_version(data, package_name),
     )
@@ -195,8 +246,12 @@ def _fixed_version(data: dict[str, Any], package_name: str) -> str | None:
             if not isinstance(range_, dict):
                 continue
             for event in range_.get("events") or []:
-                if isinstance(event, dict) and "fixed" in event:
-                    fixed.append(str(event["fixed"]))
+                if (
+                    isinstance(event, dict)
+                    and isinstance(event.get("fixed"), str)
+                    and event["fixed"]
+                ):
+                    fixed.append(event["fixed"])
     return _min_version(*fixed)
 
 
@@ -213,7 +268,8 @@ def _min_version(*versions: str | None) -> str | None:
 
 def _severity(data: dict[str, Any]) -> str:
     """GHSA database severity first, CVSS vector score as fallback."""
-    label = data.get("database_specific", {}).get("severity")
+    specific = data.get("database_specific")
+    label = specific.get("severity") if isinstance(specific, dict) else None
     if isinstance(label, str) and label.upper() in _GHSA_SEVERITY:
         return _GHSA_SEVERITY[label.upper()]
     entries = data.get("severity")

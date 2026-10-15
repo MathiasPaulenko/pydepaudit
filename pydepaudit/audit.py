@@ -4,8 +4,9 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 
-from packaging.specifiers import SpecifierSet
+from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.utils import canonicalize_name
+from packaging.version import InvalidVersion, Version
 
 from pydepaudit.cache import FileCache
 from pydepaudit.config import Config, load
@@ -79,7 +80,20 @@ def _audit(
 
     vulns: dict[int, list[Vulnerability]] = {}
     if resolved:
-        batch = osv.query_batch([(deps[i].name, v) for i, v in resolved])
+        # query OSV with the canonical PyPI name when known
+        batch = osv.query_batch(
+            [
+                (
+                    str(
+                        canonicalize_name(
+                            meta.name if (meta := metas[i]) else deps[i].name
+                        )
+                    ),
+                    v,
+                )
+                for i, v in resolved
+            ]
+        )
         for (index, _), found in zip(resolved, batch, strict=True):
             vulns[index] = found
 
@@ -98,18 +112,38 @@ def _audit(
 
 
 def _dedupe(deps: list[Dependency]) -> list[Dependency]:
-    """Keep the first declaration per normalized package name."""
-    seen: dict[str, Dependency] = {}
+    """Drop duplicate declarations without discarding distinct version specs."""
+    seen: set[tuple[str, str]] = set()
+    unique: list[Dependency] = []
     for dep in deps:
-        seen.setdefault(str(canonicalize_name(dep.name)), dep)
-    return list(seen.values())
+        identity = (str(canonicalize_name(dep.name)), dep.specifier)
+        if identity not in seen:
+            seen.add(identity)
+            unique.append(dep)
+    return unique
 
 
 def _resolved_version(dep: Dependency, meta: PackageMetadata | None) -> str | None:
     """Version to audit: the declared pin if exact, else the latest release."""
-    for spec in SpecifierSet(dep.specifier):
-        if spec.operator in ("==", "===") and "*" not in spec.version:
-            return spec.version
+    try:
+        specifiers = SpecifierSet(dep.specifier)
+    except InvalidSpecifier:
+        # malformed specifier (e.g. a bad version in a lock file) is not a pin
+        return meta.latest_version if meta else None
+    exact_pins = [
+        spec.version
+        for spec in specifiers
+        if spec.operator in ("==", "===") and "*" not in spec.version
+    ]
+    for pin in exact_pins:
+        try:
+            Version(pin)
+        except InvalidVersion:
+            continue
+        if specifiers.contains(pin, prereleases=True):
+            return pin
+    if exact_pins:
+        return None
     return meta.latest_version if meta else None
 
 
