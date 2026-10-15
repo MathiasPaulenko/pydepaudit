@@ -158,6 +158,18 @@ def test_repo_healthy_active() -> None:
     assert evaluate(_result(repo=repo), Config()) == []
 
 
+def test_repo_low_scorecard() -> None:
+    repo = RepoHealth("u", False, datetime.now(UTC), 0, 5, scorecard=3.2)
+    findings = evaluate(_result(repo=repo), Config())
+    assert [(f.severity, f.kind) for f in findings] == [("low", "scorecard")]
+    assert "3.2/10" in findings[0].message
+
+
+def test_repo_good_scorecard_no_finding() -> None:
+    repo = RepoHealth("u", False, datetime.now(UTC), 0, 5, scorecard=8.0)
+    assert evaluate(_result(repo=repo), Config()) == []
+
+
 def test_ignored_dependency_case_insensitive() -> None:
     config = Config(ignored={"Pkg": "pinned on purpose"})
     result = _result(vulns=[Vulnerability("V1", "", "critical")])

@@ -290,6 +290,9 @@ def test_show_full_output() -> None:
     respx.get("https://api.github.com/repos/owner/repo/contributors").mock(
         return_value=httpx.Response(200, json=[{"login": "a"}])
     )
+    respx.get(
+        "https://api.securityscorecards.dev/projects/github.com/owner/repo"
+    ).mock(return_value=httpx.Response(200, json={"score": 7.8}))
     result = runner.invoke(app, ["show", "pkg"])
     assert result.exit_code == 0
     assert "GHSA-1 [high] CVE-1" in result.output
@@ -352,6 +355,9 @@ def test_check_with_repo_health(tmp_path: Path) -> None:
     )
     respx.get("https://api.github.com/repos/owner/repo/contributors").mock(
         return_value=httpx.Response(200, json=[{"login": "a"}])
+    )
+    respx.get("https://api.securityscorecards.dev/projects/github.com/owner/repo").mock(
+        return_value=httpx.Response(200, json={"score": 3.1})
     )
     result = runner.invoke(app, ["check", str(tmp_path)])
     assert result.exit_code == 0

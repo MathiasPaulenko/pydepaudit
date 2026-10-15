@@ -46,6 +46,7 @@ class RepoHealth:
     pushed_at: datetime | None
     open_issues: int
     contributors: int | None
+    scorecard: float | None = None  # OpenSSF Scorecard 0-10, None if unrated
 
 
 @dataclass(frozen=True)

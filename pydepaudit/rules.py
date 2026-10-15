@@ -139,18 +139,30 @@ def _repo_findings(result: AuditResult, config: Config) -> list[Finding]:
     if repo.archived:
         return [Finding("high", "archived", "upstream repository is archived")]
 
+    findings = []
     months = _months_since(repo.pushed_at) if repo.pushed_at else None
-    if months is None or months < config.inactive_months:
-        return []
-    if repo.contributors == 1:
-        return [
-            Finding(
-                "medium",
-                "maintainer",
-                f"single contributor, inactive {months}mo",
+    if months is not None and months >= config.inactive_months:
+        if repo.contributors == 1:
+            findings.append(
+                Finding(
+                    "medium",
+                    "maintainer",
+                    f"single contributor, inactive {months}mo",
+                )
             )
-        ]
-    return [Finding("low", "maintainer", f"repository inactive {months}mo")]
+        else:
+            findings.append(
+                Finding("low", "maintainer", f"repository inactive {months}mo")
+            )
+    if repo.scorecard is not None and repo.scorecard < config.scorecard_min:
+        findings.append(
+            Finding(
+                "low",
+                "scorecard",
+                f"OpenSSF Scorecard {repo.scorecard:.1f}/10",
+            )
+        )
+    return findings
 
 
 def _is_strong_copyleft(license_: str) -> bool:

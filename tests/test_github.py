@@ -61,6 +61,9 @@ def test_repo_health() -> None:
             },
         )
     )
+    respx.get(
+        "https://api.securityscorecards.dev/projects/github.com/psf/requests"
+    ).mock(return_value=httpx.Response(200, json={"score": 8.4}))
 
     health = GitHubClient().repo_health("psf/requests")
 
@@ -68,6 +71,7 @@ def test_repo_health() -> None:
     assert health.archived is False
     assert health.open_issues == 42
     assert health.contributors == 150
+    assert health.scorecard == 8.4
     assert health.pushed_at is not None
     assert health.pushed_at.year == 2025
 
@@ -82,6 +86,9 @@ def test_repo_health_single_contributor() -> None:
     )
     respx.get("https://api.github.com/repos/a/tiny/contributors").mock(
         return_value=httpx.Response(200, json=[{"login": "a"}])
+    )
+    respx.get("https://api.securityscorecards.dev/projects/github.com/a/tiny").mock(
+        return_value=httpx.Response(404)
     )
     health = GitHubClient().repo_health("a/tiny")
     assert health is not None
@@ -109,10 +116,14 @@ def test_repo_health_paginated_contributors() -> None:
             },
         )
     )
+    respx.get("https://api.securityscorecards.dev/projects/github.com/a/b").mock(
+        return_value=httpx.Response(200, json={"score": "NaN"})
+    )
     health = GitHubClient().repo_health("a/b")
     assert health is not None
     assert health.contributors == 42
     assert health.open_issues == 0
+    assert health.scorecard is None  # non-numeric score degrades cleanly
 
 
 def test_client_with_token() -> None:
@@ -137,12 +148,16 @@ def test_repo_health_cache_roundtrip(tmp_path: Path) -> None:
     respx.get("https://api.github.com/repos/a/b/contributors").mock(
         return_value=httpx.Response(200, json=[{"login": "x"}, {"login": "y"}])
     )
+    respx.get("https://api.securityscorecards.dev/projects/github.com/a/b").mock(
+        return_value=httpx.Response(200, json={"score": 6.2})
+    )
     client = GitHubClient(cache=cache)
     first = client.repo_health("a/b")
     # second call must hit the cache — the routes are already satisfied
     second = client.repo_health("a/b")
     assert first == second
     assert second is not None and second.contributors == 2
+    assert second.scorecard == 6.2
 
 
 @respx.mock
@@ -169,6 +184,9 @@ def test_repo_health_corrupt_cache_refetches(tmp_path: Path) -> None:
     respx.get("https://api.github.com/repos/a/b/contributors").mock(
         return_value=httpx.Response(403)
     )
+    respx.get("https://api.securityscorecards.dev/projects/github.com/a/b").mock(
+        return_value=httpx.Response(404)
+    )
     health = GitHubClient(cache=cache).repo_health("a/b")
     assert health is not None
     assert health.contributors is None  # contributors endpoint failed
@@ -184,6 +202,9 @@ def test_repo_health_malformed_pushed_at() -> None:
     )
     respx.get("https://api.github.com/repos/a/b/contributors").mock(
         return_value=httpx.Response(200, json=[{"login": "x"}])
+    )
+    respx.get("https://api.securityscorecards.dev/projects/github.com/a/b").mock(
+        return_value=httpx.Response(404)
     )
     health = GitHubClient().repo_health("a/b")
     assert health is not None

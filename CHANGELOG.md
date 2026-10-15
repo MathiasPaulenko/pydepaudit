@@ -39,6 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `check --installed` audits the live environment via `importlib.metadata`
   instead of declared dependency files.
 - `--format sarif` emits SARIF 2.1.0 for GitHub code scanning upload.
+- OpenSSF Scorecard as an extra maintainer-health signal: repos scoring below
+  `scorecard_min` (default 5.0, configurable in `.pydepaudit.toml`) produce a
+  low-severity finding; `show` prints the score.
 
 ### Fixed
 

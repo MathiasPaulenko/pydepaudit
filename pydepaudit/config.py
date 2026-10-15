@@ -27,6 +27,7 @@ class Config:
     stale_months: int = 12
     stale_medium_months: int = 18
     inactive_months: int = 12
+    scorecard_min: float = 5.0  # OpenSSF Scorecard threshold for a finding
     project_license: str | None = None
     denied_licenses: tuple[str, ...] = DEFAULT_DENIED_LICENSES
     ignored: dict[str, str] = field(default_factory=dict)
@@ -46,6 +47,7 @@ def load(path: Path) -> Config:
         stale_months=int(data.get("stale_months", 12)),
         stale_medium_months=int(data.get("stale_medium_months", 18)),
         inactive_months=int(data.get("inactive_months", 12)),
+        scorecard_min=float(data.get("scorecard_min", 5.0)),
         project_license=license_ if isinstance(license_, str) else None,
         denied_licenses=tuple(data.get("denied_licenses", DEFAULT_DENIED_LICENSES)),
         ignored=(

@@ -178,5 +178,8 @@ def show(
         typer.echo(f"Last push:     {health.pushed_at or 'unknown'}")
         typer.echo(f"Open issues:   {health.open_issues}")
         typer.echo(f"Contributors:  {health.contributors or 'unknown'}")
+        score = health.scorecard
+        rated = f"{score:.1f}/10" if score is not None else "unrated"
+        typer.echo(f"Scorecard:     {rated}")
     for label, url in meta.project_urls.items():
         typer.echo(f"{label}: {url}")

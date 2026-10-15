@@ -87,6 +87,7 @@ class GitHubClient:
             ),
             open_issues=open_issues if isinstance(open_issues, int) else 0,
             contributors=self._contributors(repo),
+            scorecard=self._scorecard(repo),
         )
 
     def _contributors(self, repo: str) -> int | None:
@@ -103,6 +104,16 @@ class GitHubClient:
         payload = response.json()
         return len(payload) if isinstance(payload, list) else None
 
+    def _scorecard(self, repo: str) -> float | None:
+        """OpenSSF Scorecard aggregate score (0-10), None when unrated."""
+        response = self._client.get(
+            f"https://api.securityscorecards.dev/projects/github.com/{repo}"
+        )
+        if response.status_code != 200:
+            return None
+        score = response.json().get("score")
+        return float(score) if isinstance(score, int | float) else None
+
 
 def _to_cached(health: RepoHealth | None) -> dict[str, Any]:
     if health is None:
@@ -114,6 +125,7 @@ def _to_cached(health: RepoHealth | None) -> dict[str, Any]:
         "pushed_at": health.pushed_at.isoformat() if health.pushed_at else None,
         "open_issues": health.open_issues,
         "contributors": health.contributors,
+        "scorecard": health.scorecard,
     }
 
 
@@ -127,6 +139,7 @@ def _from_cached(data: dict[str, Any]) -> RepoHealth | None:
         pushed_at=datetime.fromisoformat(pushed_at) if pushed_at else None,
         open_issues=int(data.get("open_issues", 0)),
         contributors=data.get("contributors"),
+        scorecard=data.get("scorecard"),
     )
 
 
