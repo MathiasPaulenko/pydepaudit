@@ -97,6 +97,12 @@ legacy-lib = "vendored fork, upstream abandoned on purpose"
 HTTP responses are cached in `.pydepaudit-cache/` (1h TTL) so repeated runs stay
 fast and don't hammer the APIs. Add it to your `.gitignore` or use `--no-cache`.
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) — dev setup, test workflow and commit
+conventions. Security issues go to [SECURITY.md](SECURITY.md), never to public
+issues.
+
 ## Status
 
 Early development — the CLI surface may change before 1.0.

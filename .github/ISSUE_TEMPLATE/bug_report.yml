@@ -1,0 +1,33 @@
+name: Bug report
+description: Something pydepaudit reports or does is wrong
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Expected vs actual behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: Command run and the dependency file contents (or a minimal one).
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: pydepaudit version
+      description: Output of `pydepaudit --version`.
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python version and OS
+      placeholder: e.g. 3.13 on Windows 11
+    validations:
+      required: true
