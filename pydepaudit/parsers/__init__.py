@@ -4,11 +4,12 @@ from collections.abc import Callable
 from pathlib import Path
 
 from pydepaudit.models import Dependency
-from pydepaudit.parsers import pyproject, requirements, uvlock
+from pydepaudit.parsers import poetrylock, pyproject, requirements, uvlock
 
 # In priority order: lock files first since they carry exact versions.
 _PARSERS: list[tuple[str, Callable[[Path], list[Dependency]]]] = [
     ("uv.lock", uvlock.parse),
+    ("poetry.lock", poetrylock.parse),
     ("requirements.txt", requirements.parse),
     ("pyproject.toml", pyproject.parse),
 ]

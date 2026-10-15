@@ -24,6 +24,10 @@ class OSVClient:
     def __init__(self, client: httpx.Client | None = None) -> None:
         self._client = client or httpx.Client(base_url=BASE_URL, timeout=15.0)
 
+    def close(self) -> None:
+        """Release the underlying HTTP client resources."""
+        self._client.close()
+
     def query_batch(self, packages: list[tuple[str, str]]) -> list[list[Vulnerability]]:
         """Return vulnerabilities per (name, version), preserving input order."""
         if not packages:

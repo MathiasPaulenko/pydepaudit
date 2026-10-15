@@ -38,8 +38,31 @@ def audit_project(
     if not deps:
         return []
 
-    config = config or load(path)
-    pypi = pypi or PyPIClient(cache=cache)
+    owned: list[PyPIClient | OSVClient | GitHubClient] = []
+    if pypi is None:
+        pypi = PyPIClient(cache=cache)
+        owned.append(pypi)
+    if osv is None:
+        osv = OSVClient()
+        owned.append(osv)
+    if github is None:
+        github = GitHubClient(cache=cache)
+        owned.append(github)
+
+    try:
+        return _audit(deps, config or load(path), pypi, osv, github)
+    finally:
+        for client in owned:
+            client.close()
+
+
+def _audit(
+    deps: list[Dependency],
+    config: Config,
+    pypi: PyPIClient,
+    osv: OSVClient,
+    github: GitHubClient,
+) -> list[AuditResult]:
     with ThreadPoolExecutor(max_workers=_WORKERS) as pool:
         metas = list(pool.map(pypi.package, [d.name for d in deps]))
 
@@ -51,12 +74,11 @@ def audit_project(
 
     vulns: dict[int, list[Vulnerability]] = {}
     if resolved:
-        osv = osv or OSVClient()
         batch = osv.query_batch([(deps[i].name, v) for i, v in resolved])
         for (index, _), found in zip(resolved, batch, strict=True):
             vulns[index] = found
 
-    healths = _repo_healths(metas, github or GitHubClient(cache=cache))
+    healths = _repo_healths(metas, github)
 
     results = []
     for i, (dep, meta) in enumerate(zip(deps, metas, strict=True)):

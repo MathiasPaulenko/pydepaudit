@@ -4,6 +4,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Annotated
 
+import httpx
 import typer
 from rich.console import Console
 
@@ -63,17 +64,34 @@ def check(
     ] = False,
 ) -> None:
     """Audit the dependencies of a project."""
+    valid = ", ".join(SEVERITY_ORDER)
+    if format_ not in ("table", "json"):
+        typer.echo(f"Invalid --format '{format_}' (expected: table, json)", err=True)
+        raise typer.Exit(2)
+    if fail_on is not None and fail_on not in SEVERITY_ORDER:
+        typer.echo(f"Invalid --fail-on '{fail_on}' (expected: {valid})", err=True)
+        raise typer.Exit(2)
+
     project = Path(path)
-    config = load(project)
+    try:
+        config = load(project)
+    except (OSError, ValueError) as exc:
+        typer.echo(f"Invalid .pydepaudit.toml: {exc}", err=True)
+        raise typer.Exit(2) from exc
     if license_:
         config = replace(config, project_license=license_)
     cache = None if no_cache else FileCache(project / ".pydepaudit-cache")
 
-    if format_ == "json":
-        results = audit_project(project, config=config, cache=cache)
-    else:
-        with Console(stderr=True).status("Auditing dependencies…"):
+    try:
+        if format_ == "json":
             results = audit_project(project, config=config, cache=cache)
+        else:
+            with Console(stderr=True).status("Auditing dependencies…"):
+                results = audit_project(project, config=config, cache=cache)
+    except httpx.HTTPError as exc:
+        typer.echo(f"Error contacting an upstream API: {exc}", err=True)
+        raise typer.Exit(1) from exc
+
     if not results:
         typer.echo("No dependency files found in the project.")
         raise typer.Exit(1)
@@ -84,10 +102,6 @@ def check(
         report.render_table(results)
 
     if fail_on is not None:
-        if fail_on not in SEVERITY_ORDER:
-            valid = ", ".join(SEVERITY_ORDER)
-            typer.echo(f"Invalid --fail-on '{fail_on}' (expected: {valid})")
-            raise typer.Exit(2)
         threshold = SEVERITY_ORDER.index(fail_on)
         findings = [
             f
@@ -109,7 +123,8 @@ def show(
         typer.echo(f"{package} not found on PyPI.")
         raise typer.Exit(1)
 
-    vulns = OSVClient().query_batch([(meta.name, meta.latest_version)])[0]
+    batch = OSVClient().query_batch([(meta.name, meta.latest_version)])
+    vulns = batch[0] if batch else []
     repo = find_repo(meta.project_urls)
     health = GitHubClient().repo_health(repo) if repo else None
 

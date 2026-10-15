@@ -122,7 +122,13 @@ def test_check_fail_on(tmp_path: Path) -> None:
     assert result.exit_code == 1
     result = runner.invoke(app, ["check", str(tmp_path), "--fail-on", "critical"])
     assert result.exit_code == 0
+
+
+def test_check_invalid_options(tmp_path: Path) -> None:
+    # invalid flags are rejected before any network call
     result = runner.invoke(app, ["check", str(tmp_path), "--fail-on", "bogus"])
+    assert result.exit_code == 2
+    result = runner.invoke(app, ["check", str(tmp_path), "--format", "xml"])
     assert result.exit_code == 2
 
 

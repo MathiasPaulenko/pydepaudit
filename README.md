@@ -71,6 +71,9 @@ dependency files found), `2` invalid arguments.
 
 ## Configuration
 
+The project license is autodetected from `pyproject.toml` or `LICENSE`; declare it
+explicitly with `--license` or `project_license` when detection misses.
+
 Optional `.pydepaudit.toml` in the project root:
 
 ```toml

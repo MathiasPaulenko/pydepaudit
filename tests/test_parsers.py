@@ -63,5 +63,25 @@ def test_lock_priority_over_requirements(tmp_path: Path) -> None:
     assert [d.name for d in deps] == ["requests"]
 
 
+def test_requirements_url_fragment(tmp_path: Path) -> None:
+    (tmp_path / "requirements.txt").write_text(
+        "pkg @ https://example.com/pkg-1.0.tar.gz#sha256=abc\n"
+    )
+    deps = parse_project(tmp_path)
+    assert deps[0].name == "pkg"
+
+
+def test_poetrylock(tmp_path: Path) -> None:
+    (tmp_path / "poetry.lock").write_text(
+        '[[package]]\nname = "requests"\nversion = "2.31.0"\n\n'
+        '[[package]]\nname = "rich"\nversion = "13.7.1"\n'
+    )
+    deps = parse_project(tmp_path)
+    assert [(d.name, d.specifier) for d in deps] == [
+        ("requests", "==2.31.0"),
+        ("rich", "==13.7.1"),
+    ]
+
+
 def test_no_files(tmp_path: Path) -> None:
     assert parse_project(tmp_path) == []

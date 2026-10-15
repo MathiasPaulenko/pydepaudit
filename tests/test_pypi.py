@@ -57,6 +57,21 @@ def test_package_license_fallback_to_classifier() -> None:
 
 
 @respx.mock
+def test_package_license_blob_ignored() -> None:
+    blob = "MIT License\n\nPermission is hereby granted..." * 10
+    payload = {
+        "info": {"name": "bloblib", "version": "1.0", "license": blob},
+        "releases": {"1.0": []},
+    }
+    respx.get("https://pypi.org/pypi/bloblib/json").mock(
+        return_value=httpx.Response(200, json=payload)
+    )
+    meta = PyPIClient().package("bloblib")
+    assert meta is not None
+    assert meta.license is None
+
+
+@respx.mock
 def test_package_not_found() -> None:
     respx.get("https://pypi.org/pypi/nonexistent/json").mock(
         return_value=httpx.Response(404)

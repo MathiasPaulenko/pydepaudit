@@ -42,6 +42,10 @@ class GitHubClient:
         self._client = client or _default_client(token)
         self._cache = cache
 
+    def close(self) -> None:
+        """Release the underlying HTTP client resources."""
+        self._client.close()
+
     def repo_health(self, repo: str) -> RepoHealth | None:
         """Return health signals for 'owner/name', or None if unavailable."""
         key = f"github:{repo.lower()}"

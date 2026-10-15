@@ -22,6 +22,10 @@ class PyPIClient:
         self._client = client or httpx.Client(base_url=BASE_URL, timeout=10.0)
         self._cache = cache
 
+    def close(self) -> None:
+        """Release the underlying HTTP client resources."""
+        self._client.close()
+
     def package(self, name: str) -> PackageMetadata | None:
         """Return metadata for *name*, or None if it does not exist on PyPI."""
         key = f"pypi:{name.lower()}"
@@ -95,4 +99,7 @@ def _license(info: dict[str, Any]) -> str | None:
         if classifier.startswith("License ::"):
             return str(classifier).rsplit("::", 1)[-1].strip()
     text = (info.get("license") or "").strip()
-    return text or None
+    # the free-text field sometimes holds an entire license text blob
+    if not text or len(text) > 60 or "\n" in text:
+        return None
+    return text
