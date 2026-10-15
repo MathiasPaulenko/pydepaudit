@@ -1,5 +1,6 @@
 """Command-line interface for pydepaudit."""
 
+import io
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -40,7 +41,7 @@ def main(
 ) -> None:
     """pydepaudit entrypoint."""
     # upstream API data can carry any Unicode; never crash on legacy consoles
-    if hasattr(sys.stdout, "reconfigure"):
+    if isinstance(sys.stdout, io.TextIOWrapper):
         sys.stdout.reconfigure(errors="backslashreplace")
 
 

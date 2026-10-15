@@ -118,6 +118,12 @@ def test_uvlock_skips_non_string_names(tmp_path: Path) -> None:
     assert [d.name for d in deps] == ["ok"]
 
 
+def test_requirements_trailing_continuation(tmp_path: Path) -> None:
+    (tmp_path / "requirements.txt").write_text("pkg>=1.0 \\\n")
+    deps = parse_project(tmp_path)
+    assert deps[0].name == "pkg"
+
+
 def test_poetrylock(tmp_path: Path) -> None:
     (tmp_path / "poetry.lock").write_text(
         '[[package]]\nname = "requests"\nversion = "2.31.0"\n\n'
@@ -128,6 +134,29 @@ def test_poetrylock(tmp_path: Path) -> None:
         ("requests", "==2.31.0"),
         ("rich", "==13.7.1"),
     ]
+
+
+def test_poetrylock_skips_non_string_names(tmp_path: Path) -> None:
+    (tmp_path / "poetry.lock").write_text(
+        '[[package]]\nname = 42\nversion = "1.0"\n\n'
+        '[[package]]\nname = "ok"\nversion = "2.0"\n'
+    )
+    deps = parse_project(tmp_path)
+    assert [d.name for d in deps] == ["ok"]
+
+
+def test_pyproject_without_project_table(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text("[tool.black]\nline-length = 88\n")
+    assert parse_project(tmp_path) == []
+
+
+def test_pyproject_skips_invalid_requirements(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "demo"\nversion = "1.0"\n'
+        'dependencies = ["okdep", "!!not-a-req!!", 42]\n'
+    )
+    deps = parse_project(tmp_path)
+    assert [d.name for d in deps] == ["okdep"]
 
 
 def test_no_files(tmp_path: Path) -> None:

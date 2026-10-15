@@ -1,6 +1,9 @@
+from pathlib import Path
+
 import httpx
 import respx
 
+from pydepaudit.cache import FileCache
 from pydepaudit.sources.github import GitHubClient, find_repo
 
 
@@ -83,6 +86,92 @@ def test_repo_health_single_contributor() -> None:
     health = GitHubClient().repo_health("a/tiny")
     assert health is not None
     assert health.contributors == 1
+
+
+@respx.mock
+def test_repo_health_paginated_contributors() -> None:
+    respx.get("https://api.github.com/repos/a/b").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "archived": False,
+                "pushed_at": "2024-06-01T00:00:00Z",
+                "open_issues_count": None,  # malformed
+            },
+        )
+    )
+    respx.get("https://api.github.com/repos/a/b/contributors").mock(
+        return_value=httpx.Response(
+            200,
+            json=[{"login": "x"}],
+            headers={
+                "Link": '<https://api.github.com/x?per_page=1&page=42>; rel="last"'
+            },
+        )
+    )
+    health = GitHubClient().repo_health("a/b")
+    assert health is not None
+    assert health.contributors == 42
+    assert health.open_issues == 0
+
+
+def test_client_with_token() -> None:
+    client = GitHubClient(token="tok")
+    assert client._client.headers["Authorization"] == "Bearer tok"
+    client.close()
+
+
+@respx.mock
+def test_repo_health_cache_roundtrip(tmp_path: Path) -> None:
+    cache = FileCache(tmp_path / "cache")
+    respx.get("https://api.github.com/repos/a/b").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "archived": True,
+                "pushed_at": "2024-06-01T00:00:00Z",
+                "open_issues_count": 5,
+            },
+        )
+    )
+    respx.get("https://api.github.com/repos/a/b/contributors").mock(
+        return_value=httpx.Response(200, json=[{"login": "x"}, {"login": "y"}])
+    )
+    client = GitHubClient(cache=cache)
+    first = client.repo_health("a/b")
+    # second call must hit the cache — the routes are already satisfied
+    second = client.repo_health("a/b")
+    assert first == second
+    assert second is not None and second.contributors == 2
+
+
+@respx.mock
+def test_repo_health_cache_negative(tmp_path: Path) -> None:
+    cache = FileCache(tmp_path / "cache")
+    route = respx.get("https://api.github.com/repos/a/b").mock(
+        return_value=httpx.Response(404)
+    )
+    client = GitHubClient(cache=cache)
+    assert client.repo_health("a/b") is None
+    assert client.repo_health("a/b") is None  # cached miss — no second request
+    assert route.call_count == 1
+
+
+@respx.mock
+def test_repo_health_corrupt_cache_refetches(tmp_path: Path) -> None:
+    cache = FileCache(tmp_path / "cache")
+    cache.set("github:a/b", {"found": True})  # missing url → KeyError → refetch
+    respx.get("https://api.github.com/repos/a/b").mock(
+        return_value=httpx.Response(
+            200, json={"archived": False, "pushed_at": None, "open_issues_count": 0}
+        )
+    )
+    respx.get("https://api.github.com/repos/a/b/contributors").mock(
+        return_value=httpx.Response(403)
+    )
+    health = GitHubClient(cache=cache).repo_health("a/b")
+    assert health is not None
+    assert health.contributors is None  # contributors endpoint failed
 
 
 @respx.mock

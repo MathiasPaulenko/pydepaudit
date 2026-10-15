@@ -116,6 +116,29 @@ def test_corrupt_cache_falls_back_to_fetch(tmp_path: Path) -> None:
 
 
 @respx.mock
+def test_package_free_text_license() -> None:
+    payload = {
+        "info": {"name": "t", "version": "1.0", "license": "BSD-3-Clause"},
+        "releases": {"1.0": []},
+    }
+    respx.get("https://pypi.org/pypi/t/json").mock(
+        return_value=httpx.Response(200, json=payload)
+    )
+    meta = PyPIClient().package("t")
+    assert meta is not None and meta.license == "BSD-3-Clause"
+
+
+@respx.mock
+def test_package_non_string_version() -> None:
+    payload = {"info": {"name": "n", "version": [1, 0]}, "releases": {}}
+    respx.get("https://pypi.org/pypi/n/json").mock(
+        return_value=httpx.Response(200, json=payload)
+    )
+    meta = PyPIClient().package("n")
+    assert meta is not None and meta.latest_version == ""
+
+
+@respx.mock
 def test_package_http_error() -> None:
     respx.get("https://pypi.org/pypi/boom/json").mock(return_value=httpx.Response(500))
     with pytest.raises(httpx.HTTPStatusError):

@@ -220,6 +220,156 @@ def test_show_not_found() -> None:
 
 
 @respx.mock
+def test_show_network_error() -> None:
+    respx.get("https://pypi.org/pypi/x/json").mock(
+        side_effect=httpx.ConnectError("down")
+    )
+    result = runner.invoke(app, ["show", "x"])
+    assert result.exit_code == 1
+    assert "Error contacting" in result.output
+
+
+@respx.mock
+def test_show_full_output() -> None:
+    payload = {
+        "info": {
+            "name": "pkg",
+            "version": "1.0",
+            "license_expression": "MIT",
+            "project_urls": {"Source": "https://github.com/owner/repo"},
+        },
+        "releases": {"1.0": [{"upload_time_iso_8601": "2025-01-01T00:00:00Z"}]},
+    }
+    respx.get("https://pypi.org/pypi/pkg/json").mock(
+        return_value=httpx.Response(200, json=payload)
+    )
+    respx.post("https://api.osv.dev/v1/querybatch").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "vulns": [
+                            {
+                                "id": "GHSA-1",
+                                "summary": "bug",
+                                "aliases": ["CVE-1"],
+                                "database_specific": {"severity": "HIGH"},
+                            }
+                        ]
+                    }
+                ]
+            },
+        )
+    )
+    respx.get("https://api.github.com/repos/owner/repo").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "archived": False,
+                "pushed_at": "2025-06-01T00:00:00Z",
+                "open_issues_count": 7,
+            },
+        )
+    )
+    respx.get("https://api.github.com/repos/owner/repo/contributors").mock(
+        return_value=httpx.Response(200, json=[{"login": "a"}])
+    )
+    result = runner.invoke(app, ["show", "pkg"])
+    assert result.exit_code == 0
+    assert "GHSA-1 [high] CVE-1" in result.output
+    assert "owner/repo" in result.output
+    assert "Open issues:   7" in result.output
+
+
+@respx.mock
+def test_check_with_repo_health(tmp_path: Path) -> None:
+    payload = {
+        "info": {
+            "name": "pkg",
+            "version": "1.0",
+            "license_expression": "MIT",
+            "project_urls": {"Source": "https://github.com/owner/repo"},
+        },
+        "releases": {"1.0": [{"upload_time_iso_8601": "2025-01-01T00:00:00Z"}]},
+    }
+    (tmp_path / "requirements.txt").write_text("pkg==1.0\n")
+    respx.get("https://pypi.org/pypi/pkg/json").mock(
+        return_value=httpx.Response(200, json=payload)
+    )
+    respx.post("https://api.osv.dev/v1/querybatch").mock(
+        return_value=httpx.Response(200, json={"results": [{"vulns": []}]})
+    )
+    respx.get("https://api.github.com/repos/owner/repo").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "archived": True,
+                "pushed_at": "2024-01-01T00:00:00Z",
+                "open_issues_count": 3,
+            },
+        )
+    )
+    respx.get("https://api.github.com/repos/owner/repo/contributors").mock(
+        return_value=httpx.Response(200, json=[{"login": "a"}])
+    )
+    result = runner.invoke(app, ["check", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "archived" in result.output
+
+
+def test_check_license_override(tmp_path: Path) -> None:
+    (tmp_path / ".pydepaudit.toml").write_text("stale_months = 999\n")
+    (tmp_path / "requirements.txt").write_text("")
+    result = runner.invoke(app, ["check", str(tmp_path), "--license", "MIT"])
+    assert result.exit_code == 1  # no deps found, but override parsed fine
+
+
+def test_check_invalid_config(tmp_path: Path) -> None:
+    (tmp_path / ".pydepaudit.toml").write_text("stale_months = [\n")
+    result = runner.invoke(app, ["check", str(tmp_path)])
+    assert result.exit_code == 2
+    assert ".pydepaudit.toml" in result.output
+
+
+@respx.mock
+def test_check_not_on_pypi(tmp_path: Path) -> None:
+    (tmp_path / "requirements.txt").write_text("ghostpkg==1.0\n")
+    respx.get("https://pypi.org/pypi/ghostpkg/json").mock(
+        return_value=httpx.Response(404)
+    )
+    respx.post("https://api.osv.dev/v1/querybatch").mock(
+        return_value=httpx.Response(200, json={"results": [{"vulns": []}]})
+    )
+    result = runner.invoke(app, ["check", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "not on PyPI" in result.output
+
+
+@respx.mock
+def test_check_many_findings_truncated(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("COLUMNS", "300")  # wide console: no cell wrapping
+    vulns = [
+        {"id": f"GHSA-{i}", "summary": f"vuln {i}", "aliases": []} for i in range(6)
+    ]
+    payload = {
+        "info": {"name": "pkg", "version": "1.0", "license_expression": "MIT"},
+        "releases": {"1.0": [{"upload_time_iso_8601": "2025-01-01T00:00:00Z"}]},
+    }
+    (tmp_path / "requirements.txt").write_text("pkg==1.0\n")
+    respx.get("https://pypi.org/pypi/pkg/json").mock(
+        return_value=httpx.Response(200, json=payload)
+    )
+    respx.post("https://api.osv.dev/v1/querybatch").mock(
+        return_value=httpx.Response(200, json={"results": [{"vulns": vulns}]})
+    )
+    result = runner.invoke(app, ["check", str(tmp_path)])
+    assert result.exit_code == 0
+    # 6 vulns + 1 stale finding → first 4 shown, rest summarized
+    assert "+3 more" in result.output
+
+
+@respx.mock
 def test_check_skips_unresolvable(tmp_path: Path) -> None:
     (tmp_path / "requirements.txt").write_text("ghostpkg\n")
     respx.get("https://pypi.org/pypi/ghostpkg/json").mock(

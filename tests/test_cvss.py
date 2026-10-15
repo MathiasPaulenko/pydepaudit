@@ -20,6 +20,7 @@ def test_base_score_invalid() -> None:
     assert base_score("not a vector") is None
     assert base_score("CVSS:2.0/AV:N/AC:L") is None
     assert base_score("CVSS:3.1/AV:X/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H") is None
+    assert base_score("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:X/C:H/I:H/A:H") is None
 
 
 @pytest.mark.parametrize(

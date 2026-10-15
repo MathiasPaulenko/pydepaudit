@@ -18,6 +18,12 @@ def test_miss(tmp_path: Path) -> None:
     assert cache.get("nope") is None
 
 
+def test_set_unserializable_is_swallowed(tmp_path: Path) -> None:
+    cache = FileCache(tmp_path / "c")
+    cache.set("k", object())  # not JSON-serializable → must not raise
+    assert cache.get("k") is None
+
+
 def test_expired(tmp_path: Path) -> None:
     cache = FileCache(tmp_path / "c", ttl_seconds=-1)
     cache.set("k", {"v": 1})

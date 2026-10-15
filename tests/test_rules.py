@@ -125,6 +125,23 @@ def test_repo_inactive_low() -> None:
     assert [(f.severity, f.kind) for f in findings] == [("low", "maintainer")]
 
 
+def test_repo_no_push_date() -> None:
+    repo = RepoHealth("u", False, None, 0, 5)
+    assert evaluate(_result(repo=repo), Config()) == []
+
+
+def test_repo_naive_datetime() -> None:
+    naive = datetime(2020, 1, 1)  # no tzinfo — must not crash
+    repo = RepoHealth("u", False, naive, 0, 1)
+    findings = evaluate(_result(repo=repo), Config())
+    assert findings[0].kind == "maintainer"
+
+
+def test_repo_healthy_active() -> None:
+    repo = RepoHealth("u", False, datetime.now(UTC), 0, 5)
+    assert evaluate(_result(repo=repo), Config()) == []
+
+
 def test_ignored_dependency_case_insensitive() -> None:
     config = Config(ignored={"Pkg": "pinned on purpose"})
     result = _result(vulns=[Vulnerability("V1", "", "critical")])

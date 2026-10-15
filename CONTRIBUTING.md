@@ -30,7 +30,7 @@ Everything must pass before merging:
 ```bash
 ruff check . && ruff format --check .
 mypy pydepaudit
-pytest
+pytest --cov=pydepaudit
 ```
 
 - Tests use `pytest` + `respx` for HTTP mocking — no live network calls in tests.

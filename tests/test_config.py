@@ -45,3 +45,28 @@ def test_detect_license_file(tmp_path: Path) -> None:
 
 def test_detect_license_none(tmp_path: Path) -> None:
     assert detect_project_license(tmp_path) is None
+
+
+def test_detect_license_pyproject_text_form(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "demo"\nlicense = { text = "Apache-2.0" }\n'
+    )
+    assert detect_project_license(tmp_path) == "Apache-2.0"
+
+
+def test_detect_license_pyproject_file_ref(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "demo"\nlicense = { file = "COPYING" }\n'
+    )
+    (tmp_path / "COPYING").write_text("GNU GENERAL PUBLIC LICENSE\nVersion 3\n")
+    assert detect_project_license(tmp_path) == "GPL"
+
+
+def test_detect_license_broken_pyproject(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project\nbroken = [")
+    assert detect_project_license(tmp_path) is None
+
+
+def test_detect_license_unrecognized_file(tmp_path: Path) -> None:
+    (tmp_path / "LICENSE").write_text("Some proprietary text without signatures\n")
+    assert detect_project_license(tmp_path) is None
