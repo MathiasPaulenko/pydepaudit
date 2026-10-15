@@ -14,6 +14,7 @@ from pydepaudit import __version__, report
 from pydepaudit.audit import audit_project
 from pydepaudit.cache import FileCache
 from pydepaudit.config import load
+from pydepaudit.parsers import installed as installed_parsers
 from pydepaudit.rules import SEVERITY_ORDER, active_findings
 from pydepaudit.sources.github import GitHubClient, find_repo
 from pydepaudit.sources.osv import OSVClient
@@ -67,6 +68,13 @@ def check(
         bool,
         typer.Option("--no-cache", help="Bypass the local HTTP cache."),
     ] = False,
+    installed: Annotated[
+        bool,
+        typer.Option(
+            "--installed",
+            help="Audit the packages installed in the current environment.",
+        ),
+    ] = False,
 ) -> None:
     """Audit the dependencies of a project."""
     format_ = format_.lower().strip()
@@ -89,12 +97,15 @@ def check(
         config = replace(config, project_license=license_)
     cache = None if no_cache else FileCache(project / ".pydepaudit-cache")
 
+    deps = installed_parsers.parse() if installed else None
     try:
         if format_ == "json":
-            results = audit_project(project, config=config, cache=cache)
+            results = audit_project(project, config=config, cache=cache, deps=deps)
         else:
             with Console(stderr=True).status("Auditing dependencies…"):
-                results = audit_project(project, config=config, cache=cache)
+                results = audit_project(
+                    project, config=config, cache=cache, deps=deps
+                )
     except httpx.HTTPError as exc:
         typer.echo(f"Error contacting an upstream API: {exc}", err=True)
         raise typer.Exit(1) from exc
@@ -103,7 +114,11 @@ def check(
         raise typer.Exit(1) from exc
 
     if not results:
-        typer.echo("No dependency files found in the project.")
+        typer.echo(
+            "No installed packages found."
+            if installed
+            else "No dependency files found in the project."
+        )
         raise typer.Exit(1)
 
     if format_ == "json":

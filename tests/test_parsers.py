@@ -118,6 +118,58 @@ def test_uvlock_skips_non_string_names(tmp_path: Path) -> None:
     assert [d.name for d in deps] == ["ok"]
 
 
+def test_requirements_include_r(tmp_path: Path) -> None:
+    (tmp_path / "requirements.txt").write_text("maindep\n-r extra.txt\n")
+    (tmp_path / "extra.txt").write_text("extradep>=2.0\n")
+    deps = parse_project(tmp_path)
+    assert sorted(d.name for d in deps) == ["extradep", "maindep"]
+
+
+def test_requirements_include_cycle(tmp_path: Path) -> None:
+    (tmp_path / "requirements.txt").write_text("a-dep\n-r loop.txt\n")
+    (tmp_path / "loop.txt").write_text("b-dep\n-r requirements.txt\n")
+    deps = parse_project(tmp_path)
+    assert sorted(d.name for d in deps) == ["a-dep", "b-dep"]
+
+
+def test_requirements_include_missing(tmp_path: Path) -> None:
+    (tmp_path / "requirements.txt").write_text("maindep\n-r gone.txt\n")
+    assert [d.name for d in parse_project(tmp_path)] == ["maindep"]
+
+
+def test_requirements_constraint_applies_pin(tmp_path: Path) -> None:
+    (tmp_path / "requirements.txt").write_text("pkg>=1.0\n-c pins.txt\n")
+    (tmp_path / "pins.txt").write_text("pkg==1.2.3\nother==9.9\n")
+    deps = parse_project(tmp_path)
+    # constraint narrows the declared dep; non-declared constraint ignored
+    assert [(d.name, d.specifier) for d in deps] == [("pkg", ">=1.0,==1.2.3")]
+
+
+def test_requirements_markers(tmp_path: Path) -> None:
+    (tmp_path / "requirements.txt").write_text(
+        'alwaysdep\nsysdep; sys_platform == "nonexistent-os"\n'
+    )
+    deps = parse_project(tmp_path)
+    assert [d.name for d in deps] == ["alwaysdep"]
+
+
+def test_pyproject_markers(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "demo"\nversion = "1.0"\n'
+        'dependencies = ["okdep", \'skipdep; sys_platform == "nonexistent-os"\']\n'
+    )
+    deps = parse_project(tmp_path)
+    assert [d.name for d in deps] == ["okdep"]
+
+
+def test_requirements_include_longform(tmp_path: Path) -> None:
+    (tmp_path / "requirements.txt").write_text("maindep\n--requirement=sub/extra.txt\n")
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "extra.txt").write_text("nesteddep\n")
+    deps = parse_project(tmp_path)
+    assert sorted(d.name for d in deps) == ["maindep", "nesteddep"]
+
+
 def test_requirements_trailing_continuation(tmp_path: Path) -> None:
     (tmp_path / "requirements.txt").write_text("pkg>=1.0 \\\n")
     deps = parse_project(tmp_path)
@@ -157,6 +209,16 @@ def test_pyproject_skips_invalid_requirements(tmp_path: Path) -> None:
     )
     deps = parse_project(tmp_path)
     assert [d.name for d in deps] == ["okdep"]
+
+
+def test_installed_parser() -> None:
+    from pydepaudit.parsers import installed
+
+    deps = installed.parse()
+    # the dev environment always has pydepaudit itself installed
+    names = {d.name.lower() for d in deps}
+    assert "pydepaudit" in names
+    assert all(d.specifier.startswith("==") for d in deps)
 
 
 def test_no_files(tmp_path: Path) -> None:

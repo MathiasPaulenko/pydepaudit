@@ -32,9 +32,14 @@ def audit_project(
     pypi: PyPIClient | None = None,
     osv: OSVClient | None = None,
     github: GitHubClient | None = None,
+    deps: list[Dependency] | None = None,
 ) -> list[AuditResult]:
-    """Audit every declared dependency of the project at *path*."""
-    deps = _dedupe(parse_project(path))
+    """Audit the dependencies of the project at *path*.
+
+    When *deps* is given it is audited as-is (deduplicated) and no dependency
+    file is parsed — used by ``--installed`` mode.
+    """
+    deps = _dedupe(deps if deps is not None else parse_project(path))
     if not deps:
         return []
 

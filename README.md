@@ -37,6 +37,7 @@ pydepaudit check --format json    # machine-readable output for CI
 pydepaudit check --fail-on high   # exit 1 on findings >= severity
 pydepaudit check --license MIT    # declare your project license for compat checks
 pydepaudit check --no-cache       # bypass the local HTTP cache
+pydepaudit check --installed      # audit the live environment instead
 pydepaudit show requests          # details for one dependency
 ```
 

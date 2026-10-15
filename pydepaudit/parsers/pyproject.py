@@ -6,6 +6,7 @@ from pathlib import Path
 from packaging.requirements import InvalidRequirement, Requirement
 
 from pydepaudit.models import Dependency
+from pydepaudit.parsers.markers import applies_to_env
 
 
 def parse(path: Path) -> list[Dependency]:
@@ -40,6 +41,8 @@ def parse(path: Path) -> list[Dependency]:
         try:
             req = Requirement(spec)
         except InvalidRequirement:
+            continue
+        if not applies_to_env(req.marker):
             continue
         deps.append(
             Dependency(name=req.name, specifier=str(req.specifier), source=path.name)

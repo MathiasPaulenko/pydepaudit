@@ -7,6 +7,7 @@ from typer.testing import CliRunner
 
 from pydepaudit import __version__
 from pydepaudit.cli import app
+from pydepaudit.models import Dependency
 
 runner = CliRunner()
 
@@ -280,6 +281,31 @@ def test_show_full_output() -> None:
     assert "GHSA-1 [high] CVE-1" in result.output
     assert "owner/repo" in result.output
     assert "Open issues:   7" in result.output
+
+
+@respx.mock
+def test_check_installed(tmp_path: Path, monkeypatch) -> None:
+    from pydepaudit.parsers import installed as installed_parsers
+
+    monkeypatch.setattr(
+        installed_parsers,
+        "parse",
+        lambda: [Dependency("pkg", "==1.0", "installed")],
+    )
+    payload = {
+        "info": {"name": "pkg", "version": "1.0", "license_expression": "MIT"},
+        "releases": {"1.0": [{"upload_time_iso_8601": "2025-01-01T00:00:00Z"}]},
+    }
+    respx.get("https://pypi.org/pypi/pkg/json").mock(
+        return_value=httpx.Response(200, json=payload)
+    )
+    respx.post("https://api.osv.dev/v1/querybatch").mock(
+        return_value=httpx.Response(200, json={"results": [{"vulns": []}]})
+    )
+    # no dependency file exists in tmp_path — --installed must still work
+    result = runner.invoke(app, ["check", str(tmp_path), "--installed"])
+    assert result.exit_code == 0
+    assert "pkg" in result.output
 
 
 @respx.mock

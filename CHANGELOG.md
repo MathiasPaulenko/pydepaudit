@@ -32,6 +32,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CVSS v4.0 scoring (macrovector + interpolation, ported from the official
   FIRST reference implementation) — v4 vectors now resolve to severities
   instead of `unknown`.
+- requirements.txt `-r`/`--requirement` includes are followed recursively
+  (cycle-safe); `-c`/`--constraint` files narrow declared pins, pip-style.
+- Environment markers (`; sys_platform == ...`) are evaluated against the
+  current platform — inapplicable requirements are not audited.
+- `check --installed` audits the live environment via `importlib.metadata`
+  instead of declared dependency files.
 
 ### Fixed
 
