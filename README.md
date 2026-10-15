@@ -105,8 +105,7 @@ issues.
 
 ## Status
 
-Early development — the CLI surface may change before 1.0. Planned work lives in
-[ROADMAP.md](ROADMAP.md).
+Early development — the CLI surface may change before 1.0.
 
 ## License
 

@@ -64,7 +64,9 @@ class OSVClient:
         all_raw.extend([] for _ in range(len(packages) - len(all_raw)))
         details = self._hydrate(all_raw)
         return [
-            [_vulnerability(details.get(str(v.get("id") or ""), v)) for v in group]
+            _dedupe_vulns(
+                [_vulnerability(details.get(str(v.get("id") or ""), v)) for v in group]
+            )
             for group in all_raw[: len(packages)]
         ]
 
@@ -102,6 +104,44 @@ class OSVClient:
         if isinstance(doc, dict) and self._cache is not None:
             self._cache.set(key, doc)
         return doc if isinstance(doc, dict) else None
+
+
+# severities ranked for merging duplicates (worst wins)
+_SEVERITY_RANK = ("unknown", "none", "low", "medium", "high", "critical")
+
+
+def _dedupe_vulns(vulns: list[Vulnerability]) -> list[Vulnerability]:
+    """Merge records describing the same vulnerability (shared id or alias)."""
+    index_of: dict[str, int] = {}
+    kept: list[Vulnerability] = []
+    for vuln in vulns:
+        identifiers = {vuln.id, *vuln.aliases} - {""}
+        hit = next((index_of[i] for i in identifiers if i in index_of), None)
+        if hit is None:
+            kept.append(vuln)
+            hit = len(kept) - 1
+        else:
+            kept[hit] = _merge_vuln(kept[hit], vuln)
+        for identifier in identifiers:
+            index_of[identifier] = hit
+    return kept
+
+
+def _merge_vuln(a: Vulnerability, b: Vulnerability) -> Vulnerability:
+    """Merge duplicate record *b* into *a*: worst severity, union of aliases."""
+    aliases = tuple(dict.fromkeys((*a.aliases, b.id, *b.aliases))) or ()
+    severity = (
+        b.severity
+        if _SEVERITY_RANK.index(b.severity) > _SEVERITY_RANK.index(a.severity)
+        else a.severity
+    )
+    return Vulnerability(
+        id=a.id,
+        summary=a.summary or b.summary,
+        severity=severity,
+        aliases=tuple(x for x in aliases if x != a.id),
+        url=a.url or b.url,
+    )
 
 
 def _is_lite(vuln: dict[str, Any]) -> bool:

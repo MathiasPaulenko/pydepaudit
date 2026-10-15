@@ -109,6 +109,54 @@ def test_query_batch_hydrates_lite_records() -> None:
 
 
 @respx.mock
+def test_query_batch_dedupes_by_alias() -> None:
+    respx.post("https://api.osv.dev/v1/querybatch").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [
+                    {"vulns": [{"id": "GHSA-a"}, {"id": "PYSEC-b"}, {"id": "GHSA-c"}]}
+                ]
+            },
+        )
+    )
+    respx.get("https://api.osv.dev/v1/vulns/GHSA-a").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "GHSA-a",
+                "summary": "same bug",
+                "aliases": ["CVE-2024-1"],
+                "database_specific": {"severity": "MODERATE"},
+            },
+        )
+    )
+    respx.get("https://api.osv.dev/v1/vulns/PYSEC-b").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "PYSEC-b",
+                "summary": "same bug via PYSEC",
+                "aliases": ["CVE-2024-1", "GHSA-a"],
+                "database_specific": {"severity": "HIGH"},
+            },
+        )
+    )
+    respx.get("https://api.osv.dev/v1/vulns/GHSA-c").mock(
+        return_value=httpx.Response(
+            200, json={"id": "GHSA-c", "summary": "other bug", "aliases": []}
+        )
+    )
+    vulns = OSVClient().query_batch([("pkg", "1.0")])[0]
+    assert len(vulns) == 2
+    dup = vulns[0]
+    assert dup.id == "GHSA-a"
+    assert dup.severity == "high"  # worst severity wins
+    assert "PYSEC-b" in dup.aliases and "CVE-2024-1" in dup.aliases
+    assert vulns[1].id == "GHSA-c"
+
+
+@respx.mock
 def test_query_batch_lite_fetch_failure_keeps_record() -> None:
     respx.post("https://api.osv.dev/v1/querybatch").mock(
         return_value=httpx.Response(
