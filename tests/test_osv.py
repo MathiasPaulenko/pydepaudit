@@ -80,3 +80,50 @@ def test_query_batch_cvss_fallback() -> None:
 @respx.mock
 def test_query_batch_empty() -> None:
     assert OSVClient().query_batch([]) == []
+
+
+@respx.mock
+def test_query_batch_pads_short_results() -> None:
+    respx.post("https://api.osv.dev/v1/querybatch").mock(
+        return_value=httpx.Response(200, json={"results": [{"vulns": []}]})
+    )
+    results = OSVClient().query_batch([("a", "1.0"), ("b", "2.0")])
+    assert results == [[], []]
+
+
+@respx.mock
+def test_query_batch_chunks_large_inputs() -> None:
+    route = respx.post("https://api.osv.dev/v1/querybatch").mock(
+        return_value=httpx.Response(200, json={"results": []})
+    )
+    packages = [("a", "1.0")] * 501  # chunk size is 500
+    results = OSVClient().query_batch(packages)
+    assert route.call_count == 2
+    assert results == [[]] * 501
+
+
+@respx.mock
+def test_vulnerability_malformed_fields() -> None:
+    respx.post("https://api.osv.dev/v1/querybatch").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "vulns": [
+                            {
+                                "id": "PYSEC-1",
+                                "summary": None,
+                                "aliases": "CVE-2024-1",  # string, not list
+                                "severity": [],
+                            }
+                        ]
+                    }
+                ]
+            },
+        )
+    )
+    vuln = OSVClient().query_batch([("a", "1.0")])[0][0]
+    assert vuln.aliases == ()
+    assert vuln.summary == ""
+    assert vuln.severity == "unknown"

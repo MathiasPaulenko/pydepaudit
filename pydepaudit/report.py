@@ -109,6 +109,9 @@ def _sep() -> str:
     return " · " if _utf8() else " | "
 
 
+_MAX_DETAILS = 4
+
+
 def _details(result: AuditResult) -> str:
     meta = result.metadata
     assert meta is not None
@@ -116,7 +119,9 @@ def _details(result: AuditResult) -> str:
     sep = _sep()
     findings = active_findings(result)
     if findings:
-        return sep.join(f.message for f in findings)
+        shown = sep.join(f.message for f in findings[:_MAX_DETAILS])
+        remaining = len(findings) - _MAX_DETAILS
+        return shown if remaining <= 0 else f"{shown}{sep}+{remaining} more"
 
     ignored = [f for f in result.findings if f.kind == "ignored"]
     if ignored:
@@ -135,7 +140,7 @@ def _age(moment: datetime | None) -> str:
         return "unknown age"
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=UTC)
-    days = (datetime.now(UTC) - moment).days
+    days = max(0, (datetime.now(UTC) - moment).days)
     if days < 31:
         return f"{days}d ago"
     if days < 365:

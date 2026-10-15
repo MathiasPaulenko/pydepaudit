@@ -19,9 +19,9 @@ def parse(path: Path) -> list[Dependency]:
         if isinstance(source, dict) and ("editable" in source or "virtual" in source):
             continue
         name = package.get("name")
-        if not name:
+        if not isinstance(name, str) or not name:
             continue
         version = package.get("version")
-        specifier = f"=={version}" if version else ""
+        specifier = f"=={version}" if isinstance(version, str) else ""
         deps.append(Dependency(name=name, specifier=specifier, source=path.name))
     return deps

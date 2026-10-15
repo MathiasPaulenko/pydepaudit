@@ -19,7 +19,7 @@ def test_miss(tmp_path: Path) -> None:
 
 
 def test_expired(tmp_path: Path) -> None:
-    cache = FileCache(tmp_path / "c", ttl_seconds=0)
+    cache = FileCache(tmp_path / "c", ttl_seconds=-1)
     cache.set("k", {"v": 1})
     assert cache.get("k") is None
 

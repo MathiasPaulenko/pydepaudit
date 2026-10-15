@@ -19,7 +19,9 @@ class PyPIClient:
         client: httpx.Client | None = None,
         cache: FileCache | None = None,
     ) -> None:
-        self._client = client or httpx.Client(base_url=BASE_URL, timeout=10.0)
+        self._client = client or httpx.Client(
+            base_url=BASE_URL, timeout=10.0, follow_redirects=True
+        )
         self._cache = cache
 
     def close(self) -> None:
@@ -45,19 +47,23 @@ class PyPIClient:
         info = data["info"]
 
         latest = info.get("version", "")
-        files = data.get("releases", {}).get(latest, [])
+        releases = data.get("releases") or {}
+        files = releases.get(latest) or []
         timestamps = [
-            datetime.fromisoformat(f["upload_time_iso_8601"])
+            datetime.fromisoformat(upload_time)
             for f in files
-            if f.get("upload_time_iso_8601")
+            if isinstance(f, dict)
+            and isinstance(upload_time := f.get("upload_time_iso_8601"), str)
         ]
 
+        urls = info.get("project_urls")
+        pypi_name = info.get("name")
         return PackageMetadata(
-            name=info.get("name", name),
+            name=pypi_name if isinstance(pypi_name, str) else name,
             latest_version=latest,
             license=_license(info),
             last_release=max(timestamps) if timestamps else None,
-            project_urls=info.get("project_urls") or {},
+            project_urls=urls if isinstance(urls, dict) else {},
         )
 
 
@@ -95,9 +101,10 @@ def _license(info: dict[str, Any]) -> str | None:
     """
     if expression := info.get("license_expression"):
         return str(expression)
-    for classifier in info.get("classifiers", []):
-        if classifier.startswith("License ::"):
-            return str(classifier).rsplit("::", 1)[-1].strip()
+    classifiers = info.get("classifiers") or []
+    for classifier in classifiers:
+        if isinstance(classifier, str) and classifier.startswith("License ::"):
+            return classifier.rsplit("::", 1)[-1].strip()
     text = (info.get("license") or "").strip()
     # the free-text field sometimes holds an entire license text blob
     if not text or len(text) > 60 or "\n" in text:

@@ -80,6 +80,27 @@ def test_package_not_found() -> None:
 
 
 @respx.mock
+def test_package_malformed_payload() -> None:
+    payload = {
+        "info": {
+            "name": "weird",
+            "version": "1.0",
+            "classifiers": [None, 42, "License :: OSI Approved :: MIT License"],
+            "project_urls": ["not", "a", "dict"],
+        },
+        "releases": None,
+    }
+    respx.get("https://pypi.org/pypi/weird/json").mock(
+        return_value=httpx.Response(200, json=payload)
+    )
+    meta = PyPIClient().package("weird")
+    assert meta is not None
+    assert meta.license == "MIT License"
+    assert meta.project_urls == {}
+    assert meta.last_release is None
+
+
+@respx.mock
 def test_package_http_error() -> None:
     respx.get("https://pypi.org/pypi/boom/json").mock(return_value=httpx.Response(500))
     with pytest.raises(httpx.HTTPStatusError):

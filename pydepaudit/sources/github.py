@@ -12,14 +12,24 @@ from pydepaudit.models import RepoHealth
 
 BASE_URL = "https://api.github.com"
 
-_REPO_RE = re.compile(r"github\.com/([^/:\s]+)/([^/#?\s]+)")
+# github.com must be the URL host — after a scheme, 'git@' or at string start.
+# Subdomains (x.github.com) and lookalikes (evil.com?u=github.com/x) are not repos.
+_REPO_RE = re.compile(r"(?:^|://|@)github\.com[/:]([^/:\s]+)/([^/#?\s]+)")
 _NON_REPO_OWNERS = {"sponsors", "topics", "marketplace", "collections", "features"}
 _LAST_PAGE_RE = re.compile(r'[?&]page=(\d+)>;\s*rel="last"')
+
+# project_urls keys checked first — they point at the repo more reliably than
+# Homepage or Documentation links
+_PREFERRED_KEYS = ("source", "repository", "source code", "code", "homepage")
 
 
 def find_repo(project_urls: dict[str, str]) -> str | None:
     """Extract an 'owner/name' GitHub repo from PyPI project_urls."""
-    for url in project_urls.values():
+    ordered = sorted(
+        project_urls.items(),
+        key=lambda kv: 0 if kv[0].lower() in _PREFERRED_KEYS else 1,
+    )
+    for _, url in ordered:
         match = _REPO_RE.search(str(url))
         if match and match.group(1).lower() not in _NON_REPO_OWNERS:
             owner, name = match.groups()
@@ -66,7 +76,11 @@ class GitHubClient:
         return RepoHealth(
             url=f"https://github.com/{repo}",
             archived=bool(data.get("archived", False)),
-            pushed_at=datetime.fromisoformat(pushed_at) if pushed_at else None,
+            pushed_at=(
+                datetime.fromisoformat(pushed_at)
+                if isinstance(pushed_at, str)
+                else None
+            ),
             open_issues=int(data.get("open_issues_count", 0)),
             contributors=self._contributors(repo),
         )
@@ -82,7 +96,8 @@ class GitHubClient:
         match = _LAST_PAGE_RE.search(response.headers.get("Link", ""))
         if match:
             return int(match.group(1))
-        return len(response.json())
+        payload = response.json()
+        return len(payload) if isinstance(payload, list) else None
 
 
 def _to_cached(health: RepoHealth | None) -> dict[str, Any]:
@@ -116,4 +131,6 @@ def _default_client(token: str | None) -> httpx.Client:
     headers = {"Accept": "application/vnd.github+json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    return httpx.Client(base_url=BASE_URL, headers=headers, timeout=10.0)
+    return httpx.Client(
+        base_url=BASE_URL, headers=headers, timeout=10.0, follow_redirects=True
+    )

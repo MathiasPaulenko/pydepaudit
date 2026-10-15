@@ -66,8 +66,8 @@ One line in your pipeline:
 - run: pydepaudit check --fail-on high
 ```
 
-Exit codes: `0` clean or below threshold, `1` findings at/above `--fail-on` (or no
-dependency files found), `2` invalid arguments.
+Exit codes: `0` clean or below threshold, `1` findings at/above `--fail-on`, no
+dependency files found, or audit failure, `2` invalid arguments or config.
 
 ## Configuration
 

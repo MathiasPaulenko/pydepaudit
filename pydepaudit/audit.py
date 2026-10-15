@@ -69,7 +69,7 @@ def _audit(
     resolved = [
         (index, version)
         for index, (dep, meta) in enumerate(zip(deps, metas, strict=True))
-        if (version := _resolved_version(dep, meta)) is not None
+        if (version := _resolved_version(dep, meta))
     ]
 
     vulns: dict[int, list[Vulnerability]] = {}
@@ -103,7 +103,7 @@ def _dedupe(deps: list[Dependency]) -> list[Dependency]:
 def _resolved_version(dep: Dependency, meta: PackageMetadata | None) -> str | None:
     """Version to audit: the declared pin if exact, else the latest release."""
     for spec in SpecifierSet(dep.specifier):
-        if spec.operator == "==" and "*" not in spec.version:
+        if spec.operator in ("==", "===") and "*" not in spec.version:
             return spec.version
     return meta.latest_version if meta else None
 

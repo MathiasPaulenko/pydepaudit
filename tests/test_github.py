@@ -20,6 +20,20 @@ def test_find_repo_skips_non_repos() -> None:
     assert find_repo({}) is None
 
 
+def test_find_repo_rejects_lookalike_hosts() -> None:
+    assert find_repo({"Docs": "https://x.github.com/a/b"}) is None
+    assert find_repo({"Homepage": "https://evil.com/?u=github.com/a/b"}) is None
+    assert find_repo({"Source": "git@github.com:a/b.git"}) == "a/b"
+
+
+def test_find_repo_prefers_source_key() -> None:
+    urls = {
+        "Tracker": "https://github.com/a/tracker-repo",
+        "Source": "https://github.com/a/source-repo",
+    }
+    assert find_repo(urls) == "a/source-repo"
+
+
 @respx.mock
 def test_repo_health() -> None:
     respx.get("https://api.github.com/repos/psf/requests").mock(
@@ -69,6 +83,22 @@ def test_repo_health_single_contributor() -> None:
     health = GitHubClient().repo_health("a/tiny")
     assert health is not None
     assert health.contributors == 1
+
+
+@respx.mock
+def test_repo_health_malformed_pushed_at() -> None:
+    respx.get("https://api.github.com/repos/a/b").mock(
+        return_value=httpx.Response(
+            200,
+            json={"archived": False, "pushed_at": 12345, "open_issues_count": 0},
+        )
+    )
+    respx.get("https://api.github.com/repos/a/b/contributors").mock(
+        return_value=httpx.Response(200, json=[{"login": "x"}])
+    )
+    health = GitHubClient().repo_health("a/b")
+    assert health is not None
+    assert health.pushed_at is None
 
 
 @respx.mock

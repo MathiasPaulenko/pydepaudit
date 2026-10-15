@@ -1,6 +1,9 @@
 """Finding evaluation: turn audit data into severities."""
 
+import re
 from datetime import UTC, datetime
+
+from packaging.utils import canonicalize_name
 
 from pydepaudit.config import Config
 from pydepaudit.models import AuditResult, Finding
@@ -19,7 +22,12 @@ _WEAK_COPYLEFT = ("LGPL", "MPL", "EPL")
 
 def evaluate(result: AuditResult, config: Config) -> list[Finding]:
     """Apply the audit rules to a dependency and return its findings."""
-    if reason := config.ignored.get(result.dependency.name):
+    # canonicalize both sides so "Requests" in config matches "requests"
+    name = str(canonicalize_name(result.dependency.name))
+    ignored = {
+        str(canonicalize_name(key)): reason for key, reason in config.ignored.items()
+    }
+    if reason := ignored.get(name):
         return [Finding("low", "ignored", f"ignored: {reason}")]
     findings = _vulnerability_findings(result)
     findings.extend(_license_findings(result, config))
@@ -63,13 +71,27 @@ def _license_findings(result: AuditResult, config: Config) -> list[Finding]:
         return [Finding("low", "license", "license unknown")]
 
     upper = meta.license.upper()
-    if config.project_license and _is_copyleft(config.project_license.upper()):
+    if config.project_license and _is_strong_copyleft(config.project_license.upper()):
         return []  # copyleft project: copyleft dependencies are compatible
-    if any(weak in upper for weak in _WEAK_COPYLEFT):
-        return [Finding("medium", "license", f"weak copyleft license: {meta.license}")]
-    if any(pattern.upper() in upper for pattern in config.denied_licenses):
+    # SPDX alternatives: "MIT OR GPL-3.0" leaves a permissive path open
+    options = re.split(r"\s+OR\s+", upper)
+    if any(
+        not _is_weak(option) and not _is_denied(option, config) for option in options
+    ):
+        return []
+    if all(_is_denied(option, config) for option in options):
         return [Finding("high", "license", f"copyleft license: {meta.license}")]
-    return []
+    return [Finding("medium", "license", f"weak copyleft license: {meta.license}")]
+
+
+def _is_weak(option: str) -> bool:
+    return any(weak in option for weak in _WEAK_COPYLEFT)
+
+
+def _is_denied(option: str, config: Config) -> bool:
+    # strip weak-copyleft markers so "LGPL" doesn't match the "GPL" pattern
+    strong = option.replace("LGPL", "")
+    return any(pattern.upper() in strong for pattern in config.denied_licenses)
 
 
 def _staleness_findings(result: AuditResult, config: Config) -> list[Finding]:
@@ -105,11 +127,14 @@ def _repo_findings(result: AuditResult, config: Config) -> list[Finding]:
     return [Finding("low", "maintainer", f"repository inactive {months}mo")]
 
 
-def _is_copyleft(license_: str) -> bool:
+def _is_strong_copyleft(license_: str) -> bool:
+    """Uppercase license is strong copyleft. LGPL alone doesn't qualify."""
+    if "LGPL" in license_:
+        license_ = license_.replace("LGPL", "")
     return any(word in license_ for word in ("GPL", "AGPL", "SSPL"))
 
 
 def _months_since(moment: datetime) -> int:
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=UTC)
-    return (datetime.now(UTC) - moment).days // 30
+    return max(0, (datetime.now(UTC) - moment).days // 30)

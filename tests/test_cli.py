@@ -120,6 +120,8 @@ def test_check_fail_on(tmp_path: Path) -> None:
     )
     result = runner.invoke(app, ["check", str(tmp_path), "--fail-on", "high"])
     assert result.exit_code == 1
+    result = runner.invoke(app, ["check", str(tmp_path), "--fail-on", "HIGH"])
+    assert result.exit_code == 1
     result = runner.invoke(app, ["check", str(tmp_path), "--fail-on", "critical"])
     assert result.exit_code == 0
 
@@ -130,6 +132,39 @@ def test_check_invalid_options(tmp_path: Path) -> None:
     assert result.exit_code == 2
     result = runner.invoke(app, ["check", str(tmp_path), "--format", "xml"])
     assert result.exit_code == 2
+
+
+def test_check_malformed_toml(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text("not = [valid toml\n")
+    result = runner.invoke(app, ["check", str(tmp_path)])
+    assert result.exit_code == 1
+    assert "Audit failed" in result.output
+
+
+@respx.mock
+def test_check_network_error(tmp_path: Path) -> None:
+    (tmp_path / "requirements.txt").write_text("requests\n")
+    respx.get("https://pypi.org/pypi/requests/json").mock(
+        side_effect=httpx.ConnectError("no network")
+    )
+    result = runner.invoke(app, ["check", str(tmp_path)])
+    assert result.exit_code == 1
+    assert "Error contacting" in result.output
+
+
+@respx.mock
+def test_check_arbitrary_equality_pin(tmp_path: Path) -> None:
+    (tmp_path / "requirements.txt").write_text("requests===2.31.0\n")
+    respx.get("https://pypi.org/pypi/requests/json").mock(
+        return_value=httpx.Response(200, json=REQUESTS_JSON)
+    )
+    osv_route = respx.post("https://api.osv.dev/v1/querybatch").mock(
+        return_value=httpx.Response(200, json={"results": [{"vulns": []}]})
+    )
+    result = runner.invoke(app, ["check", str(tmp_path)])
+    assert result.exit_code == 0
+    body = json.loads(osv_route.calls.last.request.content)
+    assert body["queries"][0]["version"] == "2.31.0"
 
 
 @respx.mock
@@ -160,6 +195,28 @@ def test_check_ignored_dependency(tmp_path: Path) -> None:
     result = runner.invoke(app, ["check", str(tmp_path), "--fail-on", "low"])
     assert result.exit_code == 0
     assert "ignored: vendored" in result.output
+
+
+@respx.mock
+def test_show(tmp_path: Path) -> None:
+    respx.get("https://pypi.org/pypi/requests/json").mock(
+        return_value=httpx.Response(200, json=REQUESTS_JSON)
+    )
+    respx.post("https://api.osv.dev/v1/querybatch").mock(
+        return_value=httpx.Response(200, json={"results": [{"vulns": []}]})
+    )
+    result = runner.invoke(app, ["show", "requests"])
+    assert result.exit_code == 0
+    assert "requests" in result.output
+    assert "CVEs:          0" in result.output
+
+
+@respx.mock
+def test_show_not_found() -> None:
+    respx.get("https://pypi.org/pypi/ghost/json").mock(return_value=httpx.Response(404))
+    result = runner.invoke(app, ["show", "ghost"])
+    assert result.exit_code == 1
+    assert "not found" in result.output
 
 
 @respx.mock

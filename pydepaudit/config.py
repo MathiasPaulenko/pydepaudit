@@ -41,13 +41,18 @@ def load(path: Path) -> Config:
         data = tomllib.loads(file.read_text(encoding="utf-8"))
 
     license_ = data.get("project_license") or detect_project_license(path)
+    ignored = data.get("ignore")
     return Config(
         stale_months=int(data.get("stale_months", 12)),
         stale_medium_months=int(data.get("stale_medium_months", 18)),
         inactive_months=int(data.get("inactive_months", 12)),
         project_license=license_ if isinstance(license_, str) else None,
         denied_licenses=tuple(data.get("denied_licenses", DEFAULT_DENIED_LICENSES)),
-        ignored=dict(data.get("ignore", {})),
+        ignored=(
+            {str(name): str(reason) for name, reason in ignored.items()}
+            if isinstance(ignored, dict)
+            else {}
+        ),
     )
 
 
@@ -56,8 +61,12 @@ def detect_project_license(path: Path) -> str | None:
     pyproject = path / "pyproject.toml"
     license_file = None
     if pyproject.is_file():
-        data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
-        declared = data.get("project", {}).get("license")
+        try:
+            data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+        except (OSError, tomllib.TOMLDecodeError):
+            data = {}
+        project = data.get("project")
+        declared = project.get("license") if isinstance(project, dict) else None
         if isinstance(declared, str):
             return declared  # SPDX expression (PEP 639)
         if isinstance(declared, dict):

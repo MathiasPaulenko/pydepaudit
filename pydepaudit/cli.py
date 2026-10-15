@@ -1,5 +1,6 @@
 """Command-line interface for pydepaudit."""
 
+import sys
 from dataclasses import replace
 from pathlib import Path
 from typing import Annotated
@@ -38,6 +39,9 @@ def main(
     ] = False,
 ) -> None:
     """pydepaudit entrypoint."""
+    # upstream API data can carry any Unicode; never crash on legacy consoles
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="backslashreplace")
 
 
 @app.command()
@@ -64,6 +68,8 @@ def check(
     ] = False,
 ) -> None:
     """Audit the dependencies of a project."""
+    format_ = format_.lower().strip()
+    fail_on = fail_on.lower().strip() if fail_on is not None else None
     valid = ", ".join(SEVERITY_ORDER)
     if format_ not in ("table", "json"):
         typer.echo(f"Invalid --format '{format_}' (expected: table, json)", err=True)
@@ -90,6 +96,9 @@ def check(
                 results = audit_project(project, config=config, cache=cache)
     except httpx.HTTPError as exc:
         typer.echo(f"Error contacting an upstream API: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    except (OSError, ValueError) as exc:
+        typer.echo(f"Audit failed: {exc}", err=True)
         raise typer.Exit(1) from exc
 
     if not results:
@@ -118,15 +127,23 @@ def show(
     package: Annotated[str, typer.Argument(help="Dependency name to inspect.")],
 ) -> None:
     """Show audit details for a single dependency."""
-    meta = PyPIClient().package(package)
-    if meta is None:
-        typer.echo(f"{package} not found on PyPI.")
-        raise typer.Exit(1)
+    pypi, osv, github = PyPIClient(), OSVClient(), GitHubClient()
+    try:
+        meta = pypi.package(package)
+        if meta is None:
+            typer.echo(f"{package} not found on PyPI.")
+            raise typer.Exit(1)
 
-    batch = OSVClient().query_batch([(meta.name, meta.latest_version)])
-    vulns = batch[0] if batch else []
-    repo = find_repo(meta.project_urls)
-    health = GitHubClient().repo_health(repo) if repo else None
+        batch = osv.query_batch([(meta.name, meta.latest_version)])
+        vulns = batch[0] if batch else []
+        repo = find_repo(meta.project_urls)
+        health = github.repo_health(repo) if repo else None
+    except httpx.HTTPError as exc:
+        typer.echo(f"Error contacting an upstream API: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    finally:
+        for client in (pypi, osv, github):
+            client.close()
 
     typer.echo(f"Name:          {meta.name}")
     typer.echo(f"Latest:        {meta.latest_version}")

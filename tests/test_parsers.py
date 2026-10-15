@@ -71,6 +71,27 @@ def test_requirements_url_fragment(tmp_path: Path) -> None:
     assert deps[0].name == "pkg"
 
 
+def test_pyproject_malformed_shapes(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "demo"\nversion = "1.0"\n'
+        'dependencies = "requests"  # wrong type: string, not list\n'
+        "[project.optional-dependencies]\n"
+        'dev = "pytest"  # wrong type too\n'
+    )
+    assert parse_project(tmp_path) == []
+
+
+def test_uvlock_skips_non_string_names(tmp_path: Path) -> None:
+    (tmp_path / "uv.lock").write_text(
+        '[[package]]\nname = 42\nversion = "1.0"\n'
+        'source = { registry = "https://pypi.org/simple" }\n\n'
+        '[[package]]\nname = "ok"\nversion = "2.0"\n'
+        'source = { registry = "https://pypi.org/simple" }\n'
+    )
+    deps = parse_project(tmp_path)
+    assert [d.name for d in deps] == ["ok"]
+
+
 def test_poetrylock(tmp_path: Path) -> None:
     (tmp_path / "poetry.lock").write_text(
         '[[package]]\nname = "requests"\nversion = "2.31.0"\n\n'

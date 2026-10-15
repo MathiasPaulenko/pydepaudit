@@ -72,6 +72,29 @@ def test_license_copyleft_project_allows_copyleft_deps() -> None:
     assert findings == []
 
 
+def test_license_lgpl_project_still_flags_gpl_dep() -> None:
+    # LGPL is weak copyleft — it doesn't make a GPL dependency compatible
+    config = Config(project_license="LGPL-2.1")
+    findings = evaluate(_result(meta=_meta("GPL-3.0")), config)
+    assert [(f.severity, f.kind) for f in findings] == [("high", "license")]
+
+
+def test_license_dual_permissive_alternative() -> None:
+    # dual-licensed: the MIT option means no real incompatibility
+    findings = evaluate(_result(meta=_meta("MIT OR GPL-3.0-only")), Config())
+    assert findings == []
+
+
+def test_license_dual_all_denied() -> None:
+    findings = evaluate(_result(meta=_meta("GPL-2.0 OR AGPL-3.0")), Config())
+    assert [(f.severity, f.kind) for f in findings] == [("high", "license")]
+
+
+def test_license_mixed_denied_and_weak() -> None:
+    findings = evaluate(_result(meta=_meta("GPL-2.0 OR LGPL-2.1")), Config())
+    assert [(f.severity, f.kind) for f in findings] == [("medium", "license")]
+
+
 def test_stale_thresholds() -> None:
     old = datetime.now(UTC) - timedelta(days=20 * 30)
     findings = evaluate(_result(meta=_meta(last_release=old)), Config())
@@ -102,8 +125,23 @@ def test_repo_inactive_low() -> None:
     assert [(f.severity, f.kind) for f in findings] == [("low", "maintainer")]
 
 
+def test_ignored_dependency_case_insensitive() -> None:
+    config = Config(ignored={"Pkg": "pinned on purpose"})
+    result = _result(vulns=[Vulnerability("V1", "", "critical")])
+    findings = evaluate(result, config)
+    assert [(f.severity, f.kind) for f in findings] == [("low", "ignored")]
+
+
 def test_ignored_dependency() -> None:
     config = Config(ignored={"pkg": "pinned on purpose"})
+    result = _result(
+        vulns=[Vulnerability("V1", "", "critical")],
+        repo=RepoHealth("u", True, None, 0, 1),
+    )
+    findings = evaluate(result, config)
+    assert [(f.severity, f.kind) for f in findings] == [("low", "ignored")]
+    result = replace(result, findings=findings)
+    assert active_findings(result) == []
     result = _result(
         vulns=[Vulnerability("V1", "", "critical")],
         repo=RepoHealth("u", True, None, 0, 1),
