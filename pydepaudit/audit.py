@@ -43,7 +43,7 @@ def audit_project(
         pypi = PyPIClient(cache=cache)
         owned.append(pypi)
     if osv is None:
-        osv = OSVClient()
+        osv = OSVClient(cache=cache)
         owned.append(osv)
     if github is None:
         github = GitHubClient(cache=cache)

@@ -83,6 +83,48 @@ def test_query_batch_empty() -> None:
 
 
 @respx.mock
+def test_query_batch_hydrates_lite_records() -> None:
+    # real querybatch responses only carry id+modified; details come from /vulns/{id}
+    respx.post("https://api.osv.dev/v1/querybatch").mock(
+        return_value=httpx.Response(
+            200,
+            json={"results": [{"vulns": [{"id": "GHSA-x", "modified": "2025-01-01"}]}]},
+        )
+    )
+    respx.get("https://api.osv.dev/v1/vulns/GHSA-x").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "GHSA-x",
+                "summary": "real bug",
+                "aliases": ["CVE-2024-1"],
+                "database_specific": {"severity": "HIGH"},
+            },
+        )
+    )
+    vulns = OSVClient().query_batch([("pkg", "1.0")])[0]
+    assert vulns[0].severity == "high"
+    assert vulns[0].summary == "real bug"
+    assert vulns[0].aliases == ("CVE-2024-1",)
+
+
+@respx.mock
+def test_query_batch_lite_fetch_failure_keeps_record() -> None:
+    respx.post("https://api.osv.dev/v1/querybatch").mock(
+        return_value=httpx.Response(
+            200, json={"results": [{"vulns": [{"id": "GHSA-404"}]}]}
+        )
+    )
+    respx.get("https://api.osv.dev/v1/vulns/GHSA-404").mock(
+        return_value=httpx.Response(404)
+    )
+    vulns = OSVClient().query_batch([("pkg", "1.0")])[0]
+    assert len(vulns) == 1
+    assert vulns[0].id == "GHSA-404"
+    assert vulns[0].severity == "unknown"
+
+
+@respx.mock
 def test_query_batch_pads_short_results() -> None:
     respx.post("https://api.osv.dev/v1/querybatch").mock(
         return_value=httpx.Response(200, json={"results": [{"vulns": []}]})

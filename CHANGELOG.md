@@ -21,3 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   handling; project license autodetection from pyproject.toml/LICENSE.
 - Graceful handling of malformed API payloads, dependency files, network errors
   and non-UTF-8 consoles.
+
+### Fixed
+
+- OSV `querybatch` returns trimmed records (id + modified only); vulnerability
+  details are now hydrated from `/v1/vulns/{id}` in parallel and cached, so
+  severities, aliases and summaries are complete.
