@@ -24,11 +24,15 @@ a fix release is published and the advisory is disclosed after release.
 
 ## Scope
 
-pydepaudit is a read-only audit tool: it fetches public metadata from PyPI,
-OSV and the GitHub API. The most relevant risks are:
+pydepaudit does not modify dependency or source files in the audited project.
+It fetches public metadata from PyPI, OSV, GitHub and OpenSSF Scorecard, and
+writes HTTP responses to a per-user cache unless `--no-cache` is used. The most
+relevant risks are:
 
 - mishandling tokens (`GITHUB_TOKEN` is read from the environment and only sent
   to `api.github.com` — report any code path that could leak it)
+- malicious project-supplied cache files or redirects causing false results,
+  token exposure or requests to unintended hosts
 - unsafe parsing of project files or API responses
 - anything that lets a dependency file trigger code execution or unwanted
   network access

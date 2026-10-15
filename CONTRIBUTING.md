@@ -9,9 +9,11 @@ bug reports, feature requests, documentation and code.
 git clone https://github.com/MathiasPaulenko/pydepaudit.git
 cd pydepaudit
 python -m venv .venv
-.venv/Scripts/activate      # Windows
-source .venv/bin/activate   # Linux/macOS
-pip install -e .[dev]
+# Windows PowerShell
+.\.venv\Scripts\Activate.ps1
+# Linux/macOS
+source .venv/bin/activate
+python -m pip install -e ".[dev]"
 pre-commit install
 ```
 

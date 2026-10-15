@@ -12,7 +12,7 @@ requires-python = ">=3.11"
 authors = [{ name = "Mathias Paulenko" }]
 keywords = ["dependencies", "audit", "security", "supply-chain", "cve", "license", "ci"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
