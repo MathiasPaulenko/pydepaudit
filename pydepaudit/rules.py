@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.utils import canonicalize_name
+from packaging.version import InvalidVersion, Version
 
 from pydepaudit.config import Config
 from pydepaudit.models import AuditResult, Finding
@@ -19,6 +20,9 @@ _VULN_SEVERITY = {
 }
 
 _WEAK_COPYLEFT = ("LGPL", "MPL", "EPL")
+_UNKNOWN_LICENSES = {"UNKNOWN", "NONE", "NOASSERTION"}
+# left word-boundary so 'Simple'/'Complex' don't match 'MPL'
+_WEAK_RE = re.compile(r"(?<![A-Z0-9])(?:" + "|".join(_WEAK_COPYLEFT) + r")")
 
 
 def evaluate(result: AuditResult, config: Config) -> list[Finding]:
@@ -28,7 +32,8 @@ def evaluate(result: AuditResult, config: Config) -> list[Finding]:
     ignored = {
         str(canonicalize_name(key)): reason for key, reason in config.ignored.items()
     }
-    if reason := ignored.get(name):
+    if name in ignored:
+        reason = ignored[name] or "no reason given"
         return [Finding("low", "ignored", f"ignored: {reason}")]
     findings = _vulnerability_findings(result)
     findings.extend(_yanked_findings(result))
@@ -72,28 +77,62 @@ def _yanked_findings(result: AuditResult) -> list[Finding]:
     if meta is None or not meta.yanked_versions:
         return []
     try:
-        pinned = next(
-            (
-                s.version
-                for s in SpecifierSet(result.dependency.specifier)
-                if s.operator in ("==", "===") and "*" not in s.version
-            ),
-            None,
-        )
+        specifiers = SpecifierSet(result.dependency.specifier)
     except InvalidSpecifier:
         return []
-    if pinned and pinned in meta.yanked_versions:
+    pinned = next(
+        (
+            spec.version
+            for spec in specifiers
+            if spec.operator in ("==", "===")
+            and "*" not in spec.version
+            and _valid_pin(spec.version, specifiers)
+        ),
+        None,
+    )
+    if pinned and _is_yanked(pinned, meta.yanked_versions):
         return [
             Finding("medium", "yanked", f"pinned version {pinned} was yanked from PyPI")
         ]
     return []
 
 
+def _valid_pin(pin: str, specifiers: SpecifierSet) -> bool:
+    try:
+        Version(pin)
+    except InvalidVersion:
+        return False
+    return specifiers.contains(pin, prereleases=True)
+
+
+def _is_yanked(pinned: str, yanked: tuple[str, ...]) -> bool:
+    """Version comparison so '==1.0.0' matches a yanked release '1.0'."""
+    if pinned in yanked:
+        return True
+    try:
+        pinned_v = Version(pinned)
+    except InvalidVersion:
+        return False
+    return any(Version(v) == pinned_v for v in yanked if _parseable(v))
+
+
+def _parseable(version: str) -> bool:
+    try:
+        Version(version)
+        return True
+    except InvalidVersion:
+        return False
+
+
 def _license_findings(result: AuditResult, config: Config) -> list[Finding]:
     meta = result.metadata
     if meta is None:
         return [Finding("low", "metadata", "not found on PyPI")]
-    if not meta.license:
+    if (
+        not meta.license
+        or not meta.license.strip()
+        or meta.license.strip().upper() in _UNKNOWN_LICENSES
+    ):
         return [Finding("low", "license", "license unknown")]
 
     upper = meta.license.upper()
@@ -111,7 +150,7 @@ def _license_findings(result: AuditResult, config: Config) -> list[Finding]:
 
 
 def _is_weak(option: str) -> bool:
-    return any(weak in option for weak in _WEAK_COPYLEFT)
+    return bool(_WEAK_RE.search(option))
 
 
 def _is_denied(option: str, config: Config) -> bool:

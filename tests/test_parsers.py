@@ -1,6 +1,16 @@
 from pathlib import Path
 
-from pydepaudit.parsers import parse_project
+import pytest
+from packaging.markers import Marker, UndefinedEnvironmentName
+
+from pydepaudit.parsers import (
+    parse_project,
+    poetrylock,
+    pyproject,
+    requirements,
+    uvlock,
+)
+from pydepaudit.parsers.markers import applies_to_env
 
 
 def test_requirements(tmp_path: Path) -> None:
@@ -22,6 +32,31 @@ def test_requirements(tmp_path: Path) -> None:
     assert all(d.source == "requirements.txt" for d in deps)
 
 
+def test_marker_undefined_environment_is_conservative(monkeypatch) -> None:
+    def undefined(self, environment=None, context="metadata"):
+        raise UndefinedEnvironmentName("unknown")
+
+    monkeypatch.setattr(Marker, "evaluate", undefined)
+    assert applies_to_env(Marker("extra == 'test'")) is True
+
+
+def test_marker_recursion_is_conservative(monkeypatch) -> None:
+    def recursive(self, environment=None, context="metadata"):
+        raise RecursionError("nested marker")
+
+    monkeypatch.setattr(Marker, "evaluate", recursive)
+    assert applies_to_env(Marker("extra == 'test'")) is True
+
+
+def test_marker_does_not_hide_unexpected_errors(monkeypatch) -> None:
+    def broken(self, environment=None, context="metadata"):
+        raise RuntimeError("bug")
+
+    monkeypatch.setattr(Marker, "evaluate", broken)
+    with pytest.raises(RuntimeError, match="bug"):
+        applies_to_env(Marker("extra == 'test'"))
+
+
 def test_pyproject(tmp_path: Path) -> None:
     (tmp_path / "pyproject.toml").write_text(
         '[project]\nname = "demo"\nversion = "1.0"\n'
@@ -35,6 +70,52 @@ def test_pyproject(tmp_path: Path) -> None:
         ("rich", ""),
         ("pytest", ">=8"),
     ]
+
+
+def test_pyproject_dependency_group_includes_and_cycles(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        "[dependency-groups]\n"
+        'base = ["base-dep>=1"]\n'
+        'dev = [{include-group = "base"}, "dev-dep"]\n'
+        'loop = [{include-group = "cycle"}, "loop-dep"]\n'
+        'cycle = [{include-group = "loop"}, "cycle-dep"]\n'
+    )
+    deps = parse_project(tmp_path)
+    assert sorted(d.name for d in deps) == [
+        "base-dep",
+        "cycle-dep",
+        "dev-dep",
+        "loop-dep",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("filename", "parser"),
+    [
+        ("pyproject.toml", pyproject.parse),
+        ("poetry.lock", poetrylock.parse),
+        ("uv.lock", uvlock.parse),
+    ],
+)
+def test_deeply_nested_toml_is_clean_parse_error(
+    tmp_path: Path, filename: str, parser
+) -> None:
+    (tmp_path / filename).write_text("value = " + "[" * 2000 + "0" + "]" * 2000)
+    with pytest.raises(ValueError, match="too deeply nested"):
+        parser(tmp_path / filename)
+
+
+def test_deeply_nested_requirements_are_skipped_without_crashing(
+    tmp_path: Path,
+) -> None:
+    marker_spec = "pkg; " + "(" * 500 + "python_version >= '3.0'" + ")" * 500
+    req_file = tmp_path / "requirements.txt"
+    req_file.write_text(marker_spec + "\n")
+    assert requirements.parse(req_file) == []
+
+    pyproject_file = tmp_path / "pyproject.toml"
+    pyproject_file.write_text('[project]\ndependencies = ["' + marker_spec + '"]\n')
+    assert pyproject.parse(pyproject_file) == []
 
 
 def test_uvlock(tmp_path: Path) -> None:
@@ -85,6 +166,15 @@ def test_requirements_hashes_and_continuation(tmp_path: Path) -> None:
         ("requests", "==2.31.0"),
         ("rich", ">=13"),
     ]
+
+
+def test_requirements_many_continuations_preserve_single_logical_line() -> None:
+    from pydepaudit.parsers.requirements import _logical_lines
+
+    lines = _logical_lines("pkg\\\n" + "\\\n" * 5000 + "==1.0")
+    assert len(lines) == 1
+    assert lines[0].startswith("pkg ")
+    assert lines[0].endswith("==1.0")
 
 
 def test_pyproject_dependency_groups(tmp_path: Path) -> None:
@@ -223,3 +313,132 @@ def test_installed_parser() -> None:
 
 def test_no_files(tmp_path: Path) -> None:
     assert parse_project(tmp_path) == []
+
+
+def test_requirements_utf8_bom(tmp_path: Path) -> None:
+    (tmp_path / "requirements.txt").write_bytes(b"\xef\xbb\xbfrequests==2.31.0\n")
+    deps = parse_project(tmp_path)
+    assert [(d.name, d.specifier) for d in deps] == [("requests", "==2.31.0")]
+
+
+def test_requirements_constraint_attached_form(tmp_path: Path) -> None:
+    # pip accepts -cfile.txt (no space) too
+    (tmp_path / "requirements.txt").write_text("pkg>=1.0\n-cpins.txt\n")
+    (tmp_path / "pins.txt").write_text("pkg==1.2.3\n")
+    deps = parse_project(tmp_path)
+    assert [(d.name, d.specifier) for d in deps] == [("pkg", ">=1.0,==1.2.3")]
+
+
+def test_requirements_include_with_trailing_option(tmp_path: Path) -> None:
+    (tmp_path / "requirements.txt").write_text("maindep\n-r extra.txt --hash=x\n")
+    (tmp_path / "extra.txt").write_text("extradep\n")
+    deps = parse_project(tmp_path)
+    assert sorted(d.name for d in deps) == ["extradep", "maindep"]
+
+
+def test_requirements_equal_include_with_trailing_option(tmp_path: Path) -> None:
+    (tmp_path / "requirements.txt").write_text("-r=extra.txt --hash=x\n")
+    (tmp_path / "extra.txt").write_text("extradep\n")
+    assert [d.name for d in parse_project(tmp_path)] == ["extradep"]
+
+
+def test_uvlock_malformed_package_table(tmp_path: Path) -> None:
+    (tmp_path / "uv.lock").write_text('package = "not-a-list"\n')
+    assert parse_project(tmp_path) == []
+
+
+def test_poetrylock_malformed_package_table(tmp_path: Path) -> None:
+    (tmp_path / "poetry.lock").write_text('package = "not-a-list"\n')
+    assert parse_project(tmp_path) == []
+
+
+def test_requirements_include_inside_constraint_is_constraint(tmp_path: Path) -> None:
+    # -r inside a -c file is still a constraint — must not create deps
+    (tmp_path / "requirements.txt").write_text("pkg\n-c pins.txt\n")
+    (tmp_path / "pins.txt").write_text("-r more.txt\npkg==1.2.3\n")
+    (tmp_path / "more.txt").write_text("phantom==9.9\n")
+    deps = parse_project(tmp_path)
+    assert [(d.name, d.specifier) for d in deps] == [("pkg", "==1.2.3")]
+
+
+def test_requirements_same_file_can_be_requirement_and_constraint(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "requirements.txt").write_text("pkg\n-r shared.txt\n-c shared.txt\n")
+    (tmp_path / "shared.txt").write_text("pkg==1.2.3\n")
+    deps = parse_project(tmp_path)
+    assert [d.specifier for d in deps] == ["==1.2.3", "==1.2.3"]
+
+
+def test_requirements_include_path_with_spaces(tmp_path: Path) -> None:
+    (tmp_path / "requirements.txt").write_text('-r "sub dir/req file.txt"\n')
+    (tmp_path / "sub dir").mkdir()
+    (tmp_path / "sub dir" / "req file.txt").write_text("pkg==1.0\n")
+    assert [(d.name, d.specifier) for d in parse_project(tmp_path)] == [
+        ("pkg", "==1.0")
+    ]
+
+
+def test_requirements_include_nul_byte_target(tmp_path: Path) -> None:
+    (tmp_path / "requirements.txt").write_text("pkg==1.0\n-r a\x00b.txt\n")
+    deps = parse_project(tmp_path)
+    assert [d.name for d in deps] == ["pkg"]
+
+
+def test_requirements_skips_include_with_symlink_resolution_error(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from pydepaudit.parsers import requirements
+
+    f = tmp_path / "requirements.txt"
+    f.write_text("pkg==1.0\n-r bad.txt\n")
+    original_resolve = Path.resolve
+
+    def resolve(path: Path, *args, **kwargs) -> Path:
+        if path.name == "bad.txt":
+            raise RuntimeError("symlink loop")
+        return original_resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", resolve)
+    assert [dep.name for dep in requirements.parse(f)] == ["pkg"]
+
+
+def test_requirements_binary_file_raises(tmp_path: Path) -> None:
+    from pydepaudit.parsers import requirements
+
+    f = tmp_path / "requirements.txt"
+    f.write_bytes(b"\xff\xfe\x00pkg")
+    with pytest.raises(UnicodeDecodeError):
+        requirements.parse(f)
+
+
+def test_uvlock_skips_workspace_members(tmp_path: Path) -> None:
+    content = (
+        "version = 1\n"
+        '[[package]]\nname = "mypkg"\nversion = "1.0"\n'
+        "source = { workspace = true }\n"
+        '[[package]]\nname = "dep"\nversion = "2.0"\n'
+        'source = { registry = "https://pypi.org/simple" }\n'
+    )
+    (tmp_path / "uv.lock").write_text(content)
+    assert [d.name for d in parse_project(tmp_path)] == ["dep"]
+
+
+def test_poetrylock_skips_local_source_types(tmp_path: Path) -> None:
+    content = (
+        '[[package]]\nname = "vendored"\nversion = "1.0"\n'
+        '[package.source]\ntype = "directory"\nurl = "libs/vendored"\n'
+        '[[package]]\nname = "realdep"\nversion = "2.0"\n'
+    )
+    (tmp_path / "poetry.lock").write_text(content)
+    assert [d.name for d in parse_project(tmp_path)] == ["realdep"]
+
+
+def test_uvlock_empty_version_not_a_pin(tmp_path: Path) -> None:
+    # version = "" would produce the invalid specifier "==" — emit no pin
+    (tmp_path / "uv.lock").write_text(
+        '[[package]]\nname = "pkg"\nversion = ""\n'
+        'source = { registry = "https://pypi.org/simple" }\n'
+    )
+    deps = parse_project(tmp_path)
+    assert deps[0].specifier == ""

@@ -1,6 +1,9 @@
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
+from pydepaudit.audit import _resolved_version
 from pydepaudit.config import Config
 from pydepaudit.models import (
     AuditResult,
@@ -131,6 +134,52 @@ def test_yanked_pinned_version() -> None:
     result = _result(dep=Dependency("pkg", "==1.0"), meta=meta)
     findings = evaluate(result, Config())
     assert [(f.severity, f.kind) for f in findings] == [("medium", "yanked")]
+
+
+def test_yanked_version_normalization() -> None:
+    # '==1.0.0' must match a yanked release listed as '1.0' (PEP 440 equality)
+    meta = PackageMetadata("pkg", "2.0", "MIT", None, {}, yanked_versions=("1.0",))
+    result = _result(dep=Dependency("pkg", "==1.0.0"), meta=meta)
+    findings = evaluate(result, Config())
+    assert [(f.severity, f.kind) for f in findings] == [("medium", "yanked")]
+
+
+def test_yanked_unparseable_pin() -> None:
+    meta = PackageMetadata("pkg", "2.0", "MIT", None, {}, yanked_versions=("1.0",))
+    result = _result(dep=Dependency("pkg", "===weird-version"), meta=meta)
+    findings = evaluate(result, Config())
+    assert not any(f.kind == "yanked" for f in findings)
+
+
+def test_contradictory_pins_are_not_audited_as_installable() -> None:
+    dep = Dependency("pkg", "==1.0,>=2.0")
+    assert _resolved_version(dep, _meta()) is None
+    meta = replace(_meta(), yanked_versions=("1.0",))
+    findings = evaluate(_result(meta, dep=dep), Config())
+    assert not any(f.kind == "yanked" for f in findings)
+
+
+def test_ignored_empty_reason_still_ignored() -> None:
+    config = Config(ignored={"pkg": ""})
+    findings = evaluate(_result(), config)
+    assert [f.kind for f in findings] == ["ignored"]
+
+
+def test_license_word_embedded_mpl_not_flagged() -> None:
+    # "SIMPLE" contains "MPL" as a substring — must not be flagged weak copyleft
+    findings = evaluate(_result(meta=_meta("Simple License")), Config())
+    assert not any(f.kind == "license" and "copyleft" in f.message for f in findings)
+
+
+def test_license_whitespace_only() -> None:
+    findings = evaluate(_result(meta=_meta("   ")), Config())
+    assert [(f.severity, f.kind) for f in findings] == [("low", "license")]
+
+
+@pytest.mark.parametrize("license_", ["UNKNOWN", "NONE", "NOASSERTION"])
+def test_license_unknown_sentinel_is_not_permissive(license_: str) -> None:
+    findings = evaluate(_result(meta=_meta(license_)), Config())
+    assert [(f.severity, f.kind) for f in findings] == [("low", "license")]
 
 
 def test_yanked_range_not_flagged() -> None:

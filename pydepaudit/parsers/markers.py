@@ -1,6 +1,6 @@
 """Environment marker evaluation shared by parsers."""
 
-from packaging.markers import Marker
+from packaging.markers import Marker, UndefinedEnvironmentName
 
 
 def applies_to_env(marker: Marker | None) -> bool:
@@ -9,5 +9,5 @@ def applies_to_env(marker: Marker | None) -> bool:
         return True
     try:
         return marker.evaluate()
-    except Exception:
+    except (UndefinedEnvironmentName, RecursionError):
         return True  # unevaluable marker → audit it rather than silently drop

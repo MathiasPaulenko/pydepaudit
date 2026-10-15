@@ -1,6 +1,7 @@
 """Parser for requirements.txt files."""
 
 import re
+import shlex
 from dataclasses import replace
 from pathlib import Path
 
@@ -28,7 +29,7 @@ def parse(path: Path) -> list[Dependency]:
     """
     deps: list[Dependency] = []
     constraints: dict[str, str] = {}
-    _collect(path, deps, constraints, seen=set(), as_constraint=False)
+    _collect(path, deps, constraints, seen=set(), as_constraint=False, nested=False)
     return [replace(dep, specifier=_apply(dep, constraints)) for dep in deps]
 
 
@@ -36,17 +37,26 @@ def _collect(
     path: Path,
     deps: list[Dependency],
     constraints: dict[str, str],
-    seen: set[Path],
+    seen: set[tuple[Path, bool]],
     as_constraint: bool,
+    nested: bool,
 ) -> None:
-    resolved = path.resolve()
-    if resolved in seen or not resolved.is_file():
-        return
-    seen.add(resolved)
     try:
-        text = resolved.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
+        resolved = path.resolve()
+    except (OSError, RuntimeError, ValueError):
+        if not nested:
+            raise
+        return  # unresolvable include target (e.g. embedded NUL)
+    visit = (resolved, as_constraint)
+    if visit in seen or not resolved.is_file():
         return
+    seen.add(visit)
+    try:
+        text = resolved.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError):
+        if nested:
+            return  # missing/unreadable includes are tolerated
+        raise  # the file being parsed unreadable is an error, not "no deps"
 
     for raw in _logical_lines(text):
         line = _COMMENT_RE.split(raw, maxsplit=1)[0].strip()
@@ -60,7 +70,10 @@ def _collect(
                 deps,
                 constraints,
                 seen,
-                as_constraint=constraint,
+                # pip semantics: an -r inside a constraint file is still a
+                # constraint file — it must not introduce new dependencies
+                as_constraint=as_constraint or constraint,
+                nested=True,
             )
             continue
         line = _OPTION_RE.split(line, maxsplit=1)[0].strip()
@@ -68,7 +81,7 @@ def _collect(
             continue
         try:
             req = Requirement(line)
-        except InvalidRequirement:
+        except (InvalidRequirement, RecursionError):
             continue
         if not applies_to_env(req.marker):
             continue
@@ -89,21 +102,32 @@ def _collect(
 
 def _include_target(line: str) -> tuple[str, bool] | None:
     """Return (path, is_constraint) for -r/-c lines, else None."""
-    head, _, arg = line.partition(" ")
-    arg = arg.strip()
+    try:
+        parts = shlex.split(line)
+    except ValueError:
+        return None
+    if not parts:
+        return None
+    head = parts[0]
+    arg = parts[1] if len(parts) > 1 else ""
     if "=" in head:
-        head, _, eq_arg = head.partition("=")
-        arg = arg or eq_arg.strip()
+        head, _, attached_arg = head.partition("=")
+        arg = attached_arg or arg
     if head in ("-r", "--requirement"):
-        pass
+        is_constraint = False
+    elif head in ("-c", "--constraint"):
+        is_constraint = True
     elif head.startswith("-r") and not head.startswith("--"):
         arg = arg or head[2:]
-    elif head in ("-c", "--constraint"):
-        return (arg, True) if arg else None
+        is_constraint = False
+    elif head.startswith("-c") and not head.startswith("--"):
+        arg = arg or head[2:]
+        is_constraint = True
     else:
         return None
-    arg = arg.strip()
-    return (arg, False) if arg else None
+    # an include line can carry trailing pip options (e.g. -r f.txt --hash=...)
+    arg = _OPTION_RE.split(arg, maxsplit=1)[0].strip()
+    return (arg, is_constraint) if arg else None
 
 
 def _apply(dep: Dependency, constraints: dict[str, str]) -> str:
@@ -111,20 +135,22 @@ def _apply(dep: Dependency, constraints: dict[str, str]) -> str:
     extra = constraints.get(str(canonicalize_name(dep.name)))
     if not extra:
         return dep.specifier
-    return f"{dep.specifier},{extra}".lstrip(",")
+    parts = (part.strip() for part in f"{dep.specifier},{extra}".split(","))
+    return ",".join(dict.fromkeys(part for part in parts if part))
 
 
 def _logical_lines(text: str) -> list[str]:
     """Join lines ending in a backslash continuation, as pip does."""
-    lines = []
-    buf = ""
+    lines: list[str] = []
+    parts: list[str] = []
     for raw in text.splitlines():
         stripped = raw.rstrip()
         if stripped.endswith("\\"):
-            buf += stripped[:-1] + " "
+            parts.extend((stripped[:-1], " "))
             continue
-        lines.append(buf + stripped)
-        buf = ""
-    if buf:
-        lines.append(buf)
+        parts.append(stripped)
+        lines.append("".join(parts))
+        parts.clear()
+    if parts:
+        lines.append("".join(parts))
     return lines
