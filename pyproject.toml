@@ -49,21 +49,16 @@ Issues = "https://github.com/MathiasPaulenko/pydepaudit/issues"
 Changelog = "https://github.com/MathiasPaulenko/pydepaudit/blob/main/CHANGELOG.md"
 
 [tool.hatch.version]
-path = "src/pydepaudit/__init__.py"
-
-[tool.hatch.build.targets.wheel]
-packages = ["src/pydepaudit"]
+path = "pydepaudit/__init__.py"
 
 [tool.ruff]
 target-version = "py311"
-src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 
 [tool.mypy]
 python_version = "3.11"
-mypy_path = "src"
 strict = true
 
 [tool.pytest.ini_options]

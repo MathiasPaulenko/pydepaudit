@@ -16,7 +16,7 @@ jobs:
           cache: pip
       - run: pip install -e .[dev]
       - run: ruff check . && ruff format --check .
-      - run: mypy src
+      - run: mypy pydepaudit
 
   test:
     runs-on: ${{ matrix.os }}
