@@ -32,7 +32,10 @@ class PyPIClient:
         """Return metadata for *name*, or None if it does not exist on PyPI."""
         key = f"pypi:{name.lower()}"
         if self._cache is not None and (cached := self._cache.get(key)) is not None:
-            return _from_cached(cached)
+            try:
+                return _from_cached(cached)
+            except (TypeError, ValueError, KeyError):
+                pass  # stale schema — refetch
         meta = self._fetch(name)
         if self._cache is not None:
             self._cache.set(key, _to_cached(meta))
@@ -46,7 +49,9 @@ class PyPIClient:
         data: dict[str, Any] = response.json()
         info = data["info"]
 
-        latest = info.get("version", "")
+        latest = info.get("version")
+        if not isinstance(latest, str):
+            latest = ""
         releases = data.get("releases") or {}
         files = releases.get(latest) or []
         timestamps = [

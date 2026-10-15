@@ -16,7 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Maintainer health via the GitHub API: archived flag, last push, contributor count.
 - Findings engine with severities, `.pydepaudit.toml` config, `--fail-on` and `--license` options.
 - Local HTTP cache (1h TTL, `--no-cache` to bypass) and parallel source fetching.
-- poetry.lock parsing; dual-license (SPDX `OR`) handling; project license
-  autodetection from pyproject.toml/LICENSE.
+- poetry.lock parsing, PEP 735 dependency-groups and pip-compile-style
+  requirements (inline `--hash`, line continuations); dual-license (SPDX `OR`)
+  handling; project license autodetection from pyproject.toml/LICENSE.
 - Graceful handling of malformed API payloads, dependency files, network errors
   and non-UTF-8 consoles.

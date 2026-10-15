@@ -1,7 +1,10 @@
+from pathlib import Path
+
 import httpx
 import pytest
 import respx
 
+from pydepaudit.cache import FileCache
 from pydepaudit.sources.pypi import PyPIClient
 
 REQUESTS_JSON = {
@@ -98,6 +101,18 @@ def test_package_malformed_payload() -> None:
     assert meta.license == "MIT License"
     assert meta.project_urls == {}
     assert meta.last_release is None
+
+
+@respx.mock
+def test_corrupt_cache_falls_back_to_fetch(tmp_path: Path) -> None:
+    cache = FileCache(tmp_path / "cache")
+    cache.set("pypi:requests", {"found": True, "name": 123, "last_release": 5})
+    respx.get("https://pypi.org/pypi/requests/json").mock(
+        return_value=httpx.Response(200, json=REQUESTS_JSON)
+    )
+    meta = PyPIClient(cache=cache).package("requests")
+    assert meta is not None
+    assert meta.name == "requests"
 
 
 @respx.mock

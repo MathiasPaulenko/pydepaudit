@@ -43,8 +43,9 @@ pydepaudit show requests          # details for one dependency
 Dependency files are discovered in this order — the first one found wins:
 
 1. `uv.lock` (exact pinned versions)
-2. `requirements.txt`
-3. `pyproject.toml` (PEP 621 dependencies, including optional-dependencies)
+2. `poetry.lock`
+3. `requirements.txt`
+4. `pyproject.toml` (PEP 621 dependencies, optional-dependencies and PEP 735 dependency-groups)
 
 ## What it checks
 
@@ -57,6 +58,10 @@ Dependency files are discovered in this order — the first one found wins:
 
 All sources are public and free. GitHub works unauthenticated (60 req/h); export
 `GITHUB_TOKEN` for higher rate limits.
+
+Dual-licensed packages (e.g. `MIT OR GPL-3.0`) are not flagged — a permissive
+option keeps you compliant. Copyleft findings only fire when every alternative
+is copyleft.
 
 ## CI
 

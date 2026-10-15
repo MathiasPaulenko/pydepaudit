@@ -73,10 +73,11 @@ def _severity(data: dict[str, Any]) -> str:
     label = data.get("database_specific", {}).get("severity")
     if isinstance(label, str) and label.upper() in _GHSA_SEVERITY:
         return _GHSA_SEVERITY[label.upper()]
+    entries = data.get("severity")
     scores = [
         score
-        for entry in data.get("severity", [])
-        if str(entry.get("type", "")).startswith("CVSS")
+        for entry in (entries if isinstance(entries, list) else [])
+        if isinstance(entry, dict) and str(entry.get("type", "")).startswith("CVSS")
         for score in [base_score(str(entry.get("score", "")))]
         if score is not None
     ]

@@ -25,6 +25,14 @@ def parse(path: Path) -> list[Dependency]:
             if isinstance(extra_deps, list):
                 specs.extend(extra_deps)
 
+    # PEP 735 dependency groups (uv, pip>=25) — string items only; table
+    # entries like {include-group = "x"} carry no direct requirements
+    groups = data.get("dependency-groups")
+    if isinstance(groups, dict):
+        for group in groups.values():
+            if isinstance(group, list):
+                specs.extend(item for item in group if isinstance(item, str))
+
     deps = []
     for spec in specs:
         if not isinstance(spec, str):

@@ -60,7 +60,10 @@ class GitHubClient:
         """Return health signals for 'owner/name', or None if unavailable."""
         key = f"github:{repo.lower()}"
         if self._cache is not None and (cached := self._cache.get(key)) is not None:
-            return _from_cached(cached)
+            try:
+                return _from_cached(cached)
+            except (TypeError, ValueError, KeyError):
+                pass  # stale schema — refetch
         health = self._fetch(repo)
         if self._cache is not None:
             self._cache.set(key, _to_cached(health))
@@ -73,6 +76,7 @@ class GitHubClient:
         response.raise_for_status()
         data: dict[str, Any] = response.json()
         pushed_at = data.get("pushed_at")
+        open_issues = data.get("open_issues_count")
         return RepoHealth(
             url=f"https://github.com/{repo}",
             archived=bool(data.get("archived", False)),
@@ -81,7 +85,7 @@ class GitHubClient:
                 if isinstance(pushed_at, str)
                 else None
             ),
-            open_issues=int(data.get("open_issues_count", 0)),
+            open_issues=open_issues if isinstance(open_issues, int) else 0,
             contributors=self._contributors(repo),
         )
 

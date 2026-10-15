@@ -71,6 +71,32 @@ def test_requirements_url_fragment(tmp_path: Path) -> None:
     assert deps[0].name == "pkg"
 
 
+def test_requirements_hashes_and_continuation(tmp_path: Path) -> None:
+    # pip-compile style: inline --hash and backslash continuations
+    (tmp_path / "requirements.txt").write_text(
+        "requests==2.31.0 \\\n"
+        "    --hash=sha256:abc123 \\\n"
+        "    --hash=sha256:def456\n"
+        "rich>=13 \\\n"
+        "    --hash=sha256:999\n"
+    )
+    deps = parse_project(tmp_path)
+    assert [(d.name, d.specifier) for d in deps] == [
+        ("requests", "==2.31.0"),
+        ("rich", ">=13"),
+    ]
+
+
+def test_pyproject_dependency_groups(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "demo"\nversion = "1.0"\ndependencies = ["requests"]\n'
+        '[dependency-groups]\ndev = ["pytest", {include-group = "lint"}]\n'
+        'lint = ["ruff>=0.6"]\n'
+    )
+    deps = parse_project(tmp_path)
+    assert sorted(d.name for d in deps) == ["pytest", "requests", "ruff"]
+
+
 def test_pyproject_malformed_shapes(tmp_path: Path) -> None:
     (tmp_path / "pyproject.toml").write_text(
         '[project]\nname = "demo"\nversion = "1.0"\n'

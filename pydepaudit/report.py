@@ -23,9 +23,10 @@ def render_table(results: list[AuditResult]) -> None:
     table.add_column("Details")
 
     for result in results:
-        dep, meta = result.dependency, result.metadata
-        details = "not on PyPI" if meta is None else _details(result)
-        table.add_row(dep.name, dep.specifier or "-", _icon(_status(result)), details)
+        dep = result.dependency
+        table.add_row(
+            dep.name, dep.specifier or "-", _icon(_status(result)), _details(result)
+        )
     console.print(table)
 
     counts: dict[str, int] = {}
@@ -86,6 +87,8 @@ def render_json(results: list[AuditResult]) -> str:
 
 def _status(result: AuditResult) -> str:
     """Overall status of a dependency: fail, warn or ok."""
+    if any(f.kind == "ignored" for f in result.findings):
+        return "ok"
     worst = worst_severity(active_findings(result))
     if worst in ("critical", "high"):
         return "fail"
@@ -113,8 +116,13 @@ _MAX_DETAILS = 4
 
 
 def _details(result: AuditResult) -> str:
+    ignored = [f for f in result.findings if f.kind == "ignored"]
+    if ignored:
+        return ignored[0].message
+
     meta = result.metadata
-    assert meta is not None
+    if meta is None:
+        return "not on PyPI"
 
     sep = _sep()
     findings = active_findings(result)
@@ -122,10 +130,6 @@ def _details(result: AuditResult) -> str:
         shown = sep.join(f.message for f in findings[:_MAX_DETAILS])
         remaining = len(findings) - _MAX_DETAILS
         return shown if remaining <= 0 else f"{shown}{sep}+{remaining} more"
-
-    ignored = [f for f in result.findings if f.kind == "ignored"]
-    if ignored:
-        return ignored[0].message
 
     license_ = meta.license or "unknown license"
     parts = ["no CVEs", license_, _age(meta.last_release)]
