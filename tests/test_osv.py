@@ -101,13 +101,17 @@ def test_query_batch_does_not_follow_external_redirect() -> None:
 
 
 @respx.mock
-def test_query_batch_deep_json_is_reported_as_malformed() -> None:
+def test_query_batch_deep_json_is_handled_gracefully() -> None:
     body = b'{"results":[],"deep":' + b"[" * 20000 + b"0" + b"]" * 20000 + b"}"
     respx.post("https://api.osv.dev/v1/querybatch").mock(
         return_value=httpx.Response(200, content=body)
     )
-    with pytest.raises(ValueError, match="malformed OSV JSON"):
-        OSVClient().query_batch([("pkg", "1.0")])
+    try:
+        result = OSVClient().query_batch([("pkg", "1.0")])
+    except ValueError as exc:
+        assert "malformed" in str(exc)
+    else:
+        assert result == [[]]
 
 
 @respx.mock

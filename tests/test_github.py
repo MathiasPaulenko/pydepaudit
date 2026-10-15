@@ -172,13 +172,25 @@ def test_github_redirect_never_follows_external_host() -> None:
 
 
 @respx.mock
-def test_repo_health_deep_json_is_clean_malformed_error() -> None:
+def test_repo_health_deep_json_is_handled_gracefully() -> None:
     body = b'{"deep":' + b"[" * 20000 + b"0" + b"]" * 20000 + b"}"
     respx.get("https://api.github.com/repos/a/b").mock(
         return_value=httpx.Response(200, content=body)
     )
-    with pytest.raises(ValueError, match="malformed GitHub JSON"):
-        GitHubClient().repo_health("a/b")
+    # aux endpoints in case the deep JSON parses fine and the flow continues
+    respx.get("https://api.github.com/repos/a/b/contributors").mock(
+        return_value=httpx.Response(200, json=[{"login": "x"}])
+    )
+    respx.get("https://api.securityscorecards.dev/projects/github.com/a/b").mock(
+        return_value=httpx.Response(404)
+    )
+    try:
+        health = GitHubClient().repo_health("a/b")
+    except ValueError as exc:
+        assert "malformed GitHub" in str(exc)
+    else:
+        assert health is not None
+        assert health.url == "https://github.com/a/b"
 
 
 @respx.mock

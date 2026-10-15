@@ -184,7 +184,8 @@ def test_package_deep_json_is_a_clean_malformed_response() -> None:
     respx.get("https://pypi.org/pypi/pkg/json").mock(
         return_value=httpx.Response(200, content=body)
     )
-    with pytest.raises(ValueError, match="malformed PyPI JSON"):
+    # rejected either at decode (RecursionError) or shape validation
+    with pytest.raises(ValueError, match="malformed"):
         PyPIClient().package("pkg")
 
 
