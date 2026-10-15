@@ -8,13 +8,14 @@ from rich.console import Console
 from rich.table import Table
 
 from pydepaudit.models import AuditResult
+from pydepaudit.rules import active_findings, worst_severity
 
-_BAD = {"critical", "high"}
 _ICONS = {"fail": "🔴", "warn": "⚠️", "ok": "✅"}
 
 
 def render_table(results: list[AuditResult]) -> None:
     """Print the audit results as a terminal table."""
+    console = Console()
     table = Table()
     table.add_column("Package")
     table.add_column("Declared")
@@ -25,7 +26,19 @@ def render_table(results: list[AuditResult]) -> None:
         dep, meta = result.dependency, result.metadata
         details = "not on PyPI" if meta is None else _details(result)
         table.add_row(dep.name, dep.specifier or "-", _icon(_status(result)), details)
-    Console().print(table)
+    console.print(table)
+
+    counts: dict[str, int] = {}
+    for result in results:
+        for finding in active_findings(result):
+            counts[finding.severity] = counts.get(finding.severity, 0) + 1
+    if counts:
+        parts = ", ".join(
+            f"{counts[sev]} {sev}"
+            for sev in ("critical", "high", "medium", "low")
+            if sev in counts
+        )
+        console.print(f"{sum(counts.values())} findings: {parts}")
 
 
 def render_json(results: list[AuditResult]) -> str:
@@ -55,6 +68,14 @@ def render_json(results: list[AuditResult]) -> str:
                         }
                         for v in r.vulnerabilities
                     ],
+                    "findings": [
+                        {
+                            "severity": f.severity,
+                            "kind": f.kind,
+                            "message": f.message,
+                        }
+                        for f in r.findings
+                    ],
                 }
                 for r in results
             ]
@@ -65,10 +86,10 @@ def render_json(results: list[AuditResult]) -> str:
 
 def _status(result: AuditResult) -> str:
     """Overall status of a dependency: fail, warn or ok."""
-    severities = {v.severity for v in result.vulnerabilities}
-    if severities & _BAD:
+    worst = worst_severity(active_findings(result))
+    if worst in ("critical", "high"):
         return "fail"
-    if result.vulnerabilities or result.metadata is None:
+    if worst is not None or result.metadata is None:
         return "warn"
     return "ok"
 
@@ -91,21 +112,21 @@ def _sep() -> str:
 def _details(result: AuditResult) -> str:
     meta = result.metadata
     assert meta is not None
-    if result.vulnerabilities:
-        worst = _worst(result)
-        vulns = f"{len(result.vulnerabilities)} CVEs ({worst})"
-    else:
-        vulns = "no CVEs"
+
     sep = _sep()
+    findings = active_findings(result)
+    if findings:
+        return sep.join(f.message for f in findings)
+
+    ignored = [f for f in result.findings if f.kind == "ignored"]
+    if ignored:
+        return ignored[0].message
+
     license_ = meta.license or "unknown license"
-    return f"{vulns}{sep}{license_}{sep}{_age(meta.last_release)}"
-
-
-def _worst(result: AuditResult) -> str:
-    for severity in ("critical", "high", "medium", "low"):
-        if any(v.severity == severity for v in result.vulnerabilities):
-            return severity
-    return "unknown"
+    parts = ["no CVEs", license_, _age(meta.last_release)]
+    if result.repo_health and result.repo_health.contributors is not None:
+        parts.append(f"{result.repo_health.contributors} contributors")
+    return sep.join(parts)
 
 
 def _age(moment: datetime | None) -> str:

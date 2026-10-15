@@ -36,9 +36,31 @@ class Vulnerability:
 
 
 @dataclass(frozen=True)
+class RepoHealth:
+    """Health signals of the upstream repository (usually GitHub)."""
+
+    url: str
+    archived: bool
+    pushed_at: datetime | None
+    open_issues: int
+    contributors: int | None
+
+
+@dataclass(frozen=True)
+class Finding:
+    """A rule violation found during the audit."""
+
+    severity: str
+    kind: str
+    message: str
+
+
+@dataclass(frozen=True)
 class AuditResult:
     """Everything the audit found for one dependency."""
 
     dependency: Dependency
     metadata: PackageMetadata | None
     vulnerabilities: list[Vulnerability] = field(default_factory=list)
+    repo_health: RepoHealth | None = None
+    findings: list[Finding] = field(default_factory=list)

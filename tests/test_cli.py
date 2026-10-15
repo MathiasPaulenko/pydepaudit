@@ -69,7 +69,8 @@ def test_check_table_with_vuln(tmp_path: Path) -> None:
     result = runner.invoke(app, ["check", str(tmp_path)])
     assert result.exit_code == 0
     assert "requests" in result.output
-    assert "1 CVEs (high)" in result.output
+    assert "GHSA-xxxx" in result.output
+    assert "findings: 1 high" in result.output
     # the declared pin, not the latest PyPI version, is what gets audited
     body = json.loads(osv_route.calls.last.request.content)
     assert body["queries"][0]["version"] == "2.31.0"
@@ -91,6 +92,68 @@ def test_check_json(tmp_path: Path) -> None:
     # unversioned specifiers fall back to the latest PyPI release
     body = json.loads(osv_route.calls.last.request.content)
     assert body["queries"][0]["version"] == "2.32.3"
+
+
+@respx.mock
+def test_check_fail_on(tmp_path: Path) -> None:
+    (tmp_path / "requirements.txt").write_text("requests==2.31.0\n")
+    respx.get("https://pypi.org/pypi/requests/json").mock(
+        return_value=httpx.Response(200, json=REQUESTS_JSON)
+    )
+    respx.post("https://api.osv.dev/v1/querybatch").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "vulns": [
+                            {
+                                "id": "GHSA-xxxx",
+                                "summary": "Bad",
+                                "database_specific": {"severity": "HIGH"},
+                            }
+                        ]
+                    }
+                ]
+            },
+        )
+    )
+    result = runner.invoke(app, ["check", str(tmp_path), "--fail-on", "high"])
+    assert result.exit_code == 1
+    result = runner.invoke(app, ["check", str(tmp_path), "--fail-on", "critical"])
+    assert result.exit_code == 0
+    result = runner.invoke(app, ["check", str(tmp_path), "--fail-on", "bogus"])
+    assert result.exit_code == 2
+
+
+@respx.mock
+def test_check_ignored_dependency(tmp_path: Path) -> None:
+    (tmp_path / "requirements.txt").write_text("requests==2.31.0\n")
+    (tmp_path / ".pydepaudit.toml").write_text('[ignore]\nrequests = "vendored"\n')
+    respx.get("https://pypi.org/pypi/requests/json").mock(
+        return_value=httpx.Response(200, json=REQUESTS_JSON)
+    )
+    respx.post("https://api.osv.dev/v1/querybatch").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "vulns": [
+                            {
+                                "id": "GHSA-xxxx",
+                                "summary": "Bad",
+                                "database_specific": {"severity": "CRITICAL"},
+                            }
+                        ]
+                    }
+                ]
+            },
+        )
+    )
+    result = runner.invoke(app, ["check", str(tmp_path), "--fail-on", "low"])
+    assert result.exit_code == 0
+    assert "ignored: vendored" in result.output
 
 
 @respx.mock
