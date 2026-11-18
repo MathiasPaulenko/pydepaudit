@@ -1,6 +1,6 @@
 """Audit Python dependencies for CVEs, licenses, staleness and maintainer health."""
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 
 from pydepaudit.audit import audit_project
 
