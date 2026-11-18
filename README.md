@@ -55,6 +55,11 @@ Dependency files are discovered in this order — the first one found wins:
 3. `requirements.txt`
 4. `pyproject.toml` (PEP 621 dependencies, optional-dependencies and PEP 735 dependency-groups)
 
+The version checked against OSV is the one the project would actually install:
+an exact pin audits that pin; a range (`>=1.0,<2.0`, `==1.0.*`, `~=1.0`) audits
+the newest non-yanked release inside the range; an unpinned dependency audits
+the latest release.
+
 ## Reports
 
 JSON output has a top-level `dependencies` array. Each entry includes the

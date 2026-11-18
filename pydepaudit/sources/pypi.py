@@ -114,6 +114,7 @@ class PyPIClient:
             last_release=max(timestamps) if timestamps else None,
             project_urls=project_urls,
             yanked_versions=_yanked(releases),
+            releases=tuple(releases),
         )
 
 
@@ -128,6 +129,7 @@ def _to_cached(meta: PackageMetadata | None) -> dict[str, Any]:
         "last_release": meta.last_release.isoformat() if meta.last_release else None,
         "project_urls": meta.project_urls,
         "yanked_versions": list(meta.yanked_versions),
+        "releases": list(meta.releases),
     }
 
 
@@ -154,6 +156,7 @@ def _from_cached(data: Any) -> PackageMetadata | None:
     last_release = data.get("last_release")
     project_urls = data.get("project_urls", {})
     yanked_versions = data.get("yanked_versions", [])
+    releases = data.get("releases", [])
     if (
         not isinstance(name, str)
         or not isinstance(latest, str)
@@ -166,6 +169,8 @@ def _from_cached(data: Any) -> PackageMetadata | None:
         )
         or not isinstance(yanked_versions, list)
         or not all(isinstance(version, str) for version in yanked_versions)
+        or not isinstance(releases, list)
+        or not all(isinstance(version, str) for version in releases)
     ):
         raise ValueError("malformed cached PyPI metadata")
     canonical_name = str(canonicalize_name(name))
@@ -188,6 +193,7 @@ def _from_cached(data: Any) -> PackageMetadata | None:
         last_release=parsed_release,
         project_urls=project_urls,
         yanked_versions=tuple(yanked_versions),
+        releases=tuple(releases),
     )
 
 

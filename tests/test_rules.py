@@ -151,6 +151,14 @@ def test_yanked_unparseable_pin() -> None:
     assert not any(f.kind == "yanked" for f in findings)
 
 
+def test_yanked_malformed_specifier() -> None:
+    # a specifier that cannot even parse must not crash the yanked rule
+    meta = PackageMetadata("pkg", "2.0", "MIT", None, {}, yanked_versions=("1.0",))
+    result = _result(dep=Dependency("pkg", "==1.0 oops"), meta=meta)
+    findings = evaluate(result, Config())
+    assert not any(f.kind == "yanked" for f in findings)
+
+
 def test_contradictory_pins_are_not_audited_as_installable() -> None:
     dep = Dependency("pkg", "==1.0,>=2.0")
     assert _resolved_version(dep, _meta()) is None
@@ -169,6 +177,26 @@ def test_license_word_embedded_mpl_not_flagged() -> None:
     # "SIMPLE" contains "MPL" as a substring — must not be flagged weak copyleft
     findings = evaluate(_result(meta=_meta("Simple License")), Config())
     assert not any(f.kind == "license" and "copyleft" in f.message for f in findings)
+
+
+def test_license_explicitly_denied_weak_copyleft_is_high() -> None:
+    # a user who denies LGPL by name gets a denied finding, not "weak copyleft"
+    config = Config(denied_licenses=("LGPL",))
+    findings = evaluate(_result(meta=_meta("LGPL-2.1")), config)
+    assert [(f.severity, f.kind) for f in findings] == [("high", "license")]
+
+
+def test_license_explicitly_denied_mpl_is_high() -> None:
+    config = Config(denied_licenses=("MPL",))
+    findings = evaluate(_result(meta=_meta("MPL-2.0")), config)
+    assert [(f.severity, f.kind) for f in findings] == [("high", "license")]
+
+
+def test_license_gpl_pattern_still_skips_lgpl() -> None:
+    # "GPL" must not match inside "LGPL" — LGPL stays a weak-copyleft finding
+    config = Config(denied_licenses=("GPL",))
+    findings = evaluate(_result(meta=_meta("LGPL-2.1")), config)
+    assert [(f.severity, f.kind) for f in findings] == [("medium", "license")]
 
 
 def test_license_whitespace_only() -> None:

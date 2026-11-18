@@ -1,5 +1,6 @@
 """OSV API client (osv.dev — free, no auth)."""
 
+import math
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
@@ -267,7 +268,7 @@ def _min_version(*versions: str | None) -> str | None:
 
 
 def _severity(data: dict[str, Any]) -> str:
-    """GHSA database severity first, CVSS vector score as fallback."""
+    """GHSA database severity first, CVSS vector or numeric score as fallback."""
     specific = data.get("database_specific")
     label = specific.get("severity") if isinstance(specific, dict) else None
     if isinstance(label, str) and label.upper() in _GHSA_SEVERITY:
@@ -276,11 +277,27 @@ def _severity(data: dict[str, Any]) -> str:
     scores = [
         score
         for entry in (entries if isinstance(entries, list) else [])
-        if isinstance(entry, dict) and str(entry.get("type", "")).startswith("CVSS")
-        for score in [_cvss_score(str(entry.get("score", "")))]
+        if isinstance(entry, dict)
+        for score in [_entry_score(entry)]
         if score is not None
     ]
     return severity_band(max(scores) if scores else None)
+
+
+def _entry_score(entry: dict[str, Any]) -> float | None:
+    """CVSS vector score, or a plain numeric score (OSV 'CVSS' v2 style)."""
+    score = entry.get("score")
+    if not isinstance(score, str):
+        return None
+    if str(entry.get("type", "")).startswith("CVSS"):
+        vector = _cvss_score(score)
+        if vector is not None:
+            return vector
+    try:
+        value = float(score)
+    except ValueError:
+        return None
+    return value if math.isfinite(value) and 0 <= value <= 10 else None
 
 
 def _cvss_score(vector: str) -> float | None:

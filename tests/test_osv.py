@@ -427,6 +427,36 @@ def test_merge_vulnerability_uses_valid_id_without_duplicate_alias() -> None:
     assert "GHSA-1" not in merged.aliases
 
 
+def test_fixed_version_skips_malformed_affected_shapes() -> None:
+    from pydepaudit.sources.osv import _fixed_version
+
+    data = {
+        "affected": [
+            "not-a-dict",
+            {"package": "not-a-dict"},
+            {"package": {"name": "pkg", "ecosystem": "npm"}},  # wrong ecosystem
+            {"package": {"name": "other", "ecosystem": "PyPI"}},  # other package
+            {
+                "package": {"name": "pkg", "ecosystem": "PyPI"},
+                "ranges": ["not-a-dict", {"events": "not-a-list"}],
+            },
+            {
+                "package": {"name": "pkg", "ecosystem": "PyPI"},
+                "ranges": [{"events": [{"fixed": "1.2.3"}, "junk", {"fixed": ""}]}],
+            },
+        ]
+    }
+    assert _fixed_version(data, "pkg") == "1.2.3"
+
+
+def test_min_version_falls_back_to_string_min() -> None:
+    from pydepaudit.sources.osv import _min_version
+
+    assert _min_version("1.10", "garbage", "1.9") == "1.10"  # string-min fallback
+    assert _min_version("1.10", "1.9") == "1.9"  # semantic version min
+    assert _min_version(None, "") is None
+
+
 @respx.mock
 def test_query_batch_skips_vuln_records_without_id() -> None:
     respx.post("https://api.osv.dev/v1/querybatch").mock(
@@ -542,3 +572,69 @@ def test_vulnerability_malformed_fields() -> None:
     assert vuln.aliases == ()
     assert vuln.summary == ""
     assert vuln.severity == "unknown"
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("score", "expected"),
+    [
+        ("9.8", "critical"),  # OSV 'CVSS' v2 style: plain numeric score
+        ("0.0", "none"),
+        ("4.5", "medium"),
+        ("-1", "unknown"),  # out of range → unusable
+        ("11", "unknown"),
+        ("NaN", "unknown"),
+        ("not-a-number", "unknown"),
+    ],
+)
+def test_severity_numeric_cvss_score(score: str, expected: str) -> None:
+    respx.post("https://api.osv.dev/v1/querybatch").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "vulns": [
+                            {
+                                "id": "PYSEC-2",
+                                "summary": "numeric score",
+                                "severity": [{"type": "CVSS", "score": score}],
+                            }
+                        ]
+                    }
+                ]
+            },
+        )
+    )
+    vuln = OSVClient().query_batch([("a", "1.0")])[0][0]
+    assert vuln.severity == expected
+
+
+@respx.mock
+def test_severity_prefers_vector_over_numeric() -> None:
+    # a valid vector must win over an unrelated numeric score in the same entry
+    respx.post("https://api.osv.dev/v1/querybatch").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "vulns": [
+                            {
+                                "id": "PYSEC-3",
+                                "severity": [
+                                    {
+                                        "type": "CVSS_V3",
+                                        "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N"
+                                        "/S:U/C:L/I:N/A:N",
+                                    }
+                                ],
+                            }
+                        ]
+                    }
+                ]
+            },
+        )
+    )
+    vuln = OSVClient().query_batch([("a", "1.0")])[0][0]
+    assert vuln.severity == "low"

@@ -27,7 +27,7 @@ _WORKERS = 8
 
 
 def audit_project(
-    path: Path,
+    path: Path | str,
     config: Config | None = None,
     cache: FileCache | None = None,
     pypi: PyPIClient | None = None,
@@ -40,6 +40,7 @@ def audit_project(
     When *deps* is given it is audited as-is (deduplicated) and no dependency
     file is parsed — used by ``--installed`` mode.
     """
+    path = Path(path)
     deps = _dedupe(deps if deps is not None else parse_project(path))
     if not deps:
         return []
@@ -124,12 +125,15 @@ def _dedupe(deps: list[Dependency]) -> list[Dependency]:
 
 
 def _resolved_version(dep: Dependency, meta: PackageMetadata | None) -> str | None:
-    """Version to audit: the declared pin if exact, else the latest release."""
+    """Version to audit: the declared pin if exact, else the newest release
+    the declared specifier admits."""
+    if meta is None:
+        return None
     try:
         specifiers = SpecifierSet(dep.specifier)
     except InvalidSpecifier:
         # malformed specifier (e.g. a bad version in a lock file) is not a pin
-        return meta.latest_version if meta else None
+        return meta.latest_version
     exact_pins = [
         spec.version
         for spec in specifiers
@@ -144,7 +148,30 @@ def _resolved_version(dep: Dependency, meta: PackageMetadata | None) -> str | No
             return pin
     if exact_pins:
         return None
-    return meta.latest_version if meta else None
+    # pip installs the newest release inside the declared range (or the newest
+    # release overall when unpinned) — auditing the absolute latest would query
+    # OSV for a version the project can never get (e.g. '==1.0.*' against a
+    # 9.9.9 latest release). Yanked releases are not installable unpinned.
+    installable = [
+        version
+        for version in meta.releases
+        if version not in meta.yanked_versions and _parseable(version)
+    ]
+    # SpecifierSet.filter matches pip: finals first, prereleases only when the
+    # specifier names one or nothing else matches
+    matching = list(specifiers.filter(installable, prereleases=None))
+    if matching:
+        return max(matching, key=Version)
+    # nothing installable matched (or no release list): the declared latest
+    return meta.latest_version
+
+
+def _parseable(version: str) -> bool:
+    try:
+        Version(version)
+    except InvalidVersion:
+        return False
+    return True
 
 
 def _repo_healths(

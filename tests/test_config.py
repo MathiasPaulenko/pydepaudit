@@ -105,12 +105,32 @@ def test_load_invalid_numeric_type(tmp_path: Path) -> None:
         load(tmp_path)
 
 
+def test_load_ignore_must_be_table(tmp_path: Path) -> None:
+    (tmp_path / ".pydepaudit.toml").write_text('ignore = "requests"\n')
+    with pytest.raises(ValueError, match="ignore"):
+        load(tmp_path)
+
+
+def test_load_huge_scorecard_min_is_clean_error(tmp_path: Path) -> None:
+    # an integer too large for float conversion must not crash with OverflowError
+    (tmp_path / ".pydepaudit.toml").write_text("scorecard_min = " + "9" * 400 + "\n")
+    with pytest.raises(ValueError, match="scorecard_min"):
+        load(tmp_path)
+
+
 def test_load_deeply_nested_toml_is_clean_error(tmp_path: Path) -> None:
     (tmp_path / ".pydepaudit.toml").write_text(
         "value = " + "[" * 2000 + "0" + "]" * 2000
     )
     with pytest.raises(ValueError, match="too deeply nested"):
         load(tmp_path)
+
+
+def test_load_tolerates_utf8_bom(tmp_path: Path) -> None:
+    (tmp_path / ".pydepaudit.toml").write_bytes(
+        b"\xef\xbb\xbf" + b'project_license = "MIT"\n'
+    )
+    assert load(tmp_path).project_license == "MIT"
 
 
 def test_load_invalid_project_license_falls_back(tmp_path: Path) -> None:

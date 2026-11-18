@@ -287,6 +287,31 @@ def test_poetrylock_skips_non_string_names(tmp_path: Path) -> None:
     assert [d.name for d in deps] == ["ok"]
 
 
+def test_poetrylock_skips_non_table_packages(tmp_path: Path) -> None:
+    (tmp_path / "poetry.lock").write_text('package = [1, "x"]\n')
+    assert parse_project(tmp_path) == []
+
+
+def test_pyproject_include_group_not_a_list(tmp_path: Path) -> None:
+    # an include-group pointing at a malformed group contributes nothing
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\ndependencies = ["okdep"]\n'
+        "[dependency-groups]\n"
+        'dev = [{include-group = "broken"}]\n'
+        'broken = "not-a-list"\n'
+    )
+    deps = parse_project(tmp_path)
+    assert [d.name for d in deps] == ["okdep"]
+
+
+def test_requirements_attached_short_include(tmp_path: Path) -> None:
+    # pip accepts -rfile.txt (no space) too
+    (tmp_path / "requirements.txt").write_text("maindep\n-rattached.txt\n")
+    (tmp_path / "attached.txt").write_text("attacheddep\n")
+    deps = parse_project(tmp_path)
+    assert sorted(d.name for d in deps) == ["attacheddep", "maindep"]
+
+
 def test_pyproject_without_project_table(tmp_path: Path) -> None:
     (tmp_path / "pyproject.toml").write_text("[tool.black]\nline-length = 88\n")
     assert parse_project(tmp_path) == []
@@ -442,3 +467,47 @@ def test_uvlock_empty_version_not_a_pin(tmp_path: Path) -> None:
     )
     deps = parse_project(tmp_path)
     assert deps[0].specifier == ""
+
+
+def test_requirements_deep_include_chain_is_clean_error(tmp_path: Path) -> None:
+    # a ~1000-file include chain must not silently drop every dependency
+    n = 1200
+    for i in range(n):
+        target = f"-r chain{i + 1}.txt" if i < n - 1 else "pkg==1.0"
+        (tmp_path / f"chain{i}.txt").write_text(target + "\n")
+    with pytest.raises(ValueError, match="too deep"):
+        requirements.parse(tmp_path / "chain0.txt")
+
+
+def test_pyproject_deep_group_chain_is_clean_error(tmp_path: Path) -> None:
+    n = 1200
+    lines = []
+    for i in range(n):
+        if i < n - 1:
+            lines.append(f'g{i} = [{{include-group = "g{i + 1}"}}, "dep{i}"]')
+        else:
+            lines.append(f'g{i} = ["dep{i}"]')
+    (tmp_path / "pyproject.toml").write_text(
+        "[dependency-groups]\n" + "\n".join(lines) + "\n"
+    )
+    with pytest.raises(ValueError, match="too deeply nested"):
+        pyproject.parse(tmp_path / "pyproject.toml")
+
+
+@pytest.mark.parametrize(
+    ("filename", "parser"),
+    [
+        ("uv.lock", uvlock.parse),
+        ("poetry.lock", poetrylock.parse),
+        ("pyproject.toml", pyproject.parse),
+    ],
+)
+def test_toml_parsers_tolerate_utf8_bom(tmp_path: Path, filename: str, parser) -> None:
+    content = (
+        '[[package]]\nname = "pkg"\nversion = "1.0"\n'
+        if filename != "pyproject.toml"
+        else '[project]\ndependencies = ["pkg"]\n'
+    )
+    (tmp_path / filename).write_bytes(b"\xef\xbb\xbf" + content.encode())
+    deps = parser(tmp_path / filename)
+    assert [d.name for d in deps] == ["pkg"]

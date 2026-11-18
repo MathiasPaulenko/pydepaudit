@@ -79,7 +79,8 @@ def load(path: Path) -> Config:
         data: dict[str, Any] = {}
     else:
         try:
-            data = tomllib.loads(file.read_text(encoding="utf-8"))
+            # utf-8-sig tolerates a BOM from Windows editors
+            data = tomllib.loads(file.read_text(encoding="utf-8-sig"))
         except RecursionError as exc:
             raise ValueError("configuration TOML is too deeply nested") from exc
 
@@ -133,7 +134,7 @@ def detect_project_license(path: Path) -> str | None:
     license_file = None
     if pyproject.is_file():
         try:
-            data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+            data = tomllib.loads(pyproject.read_text(encoding="utf-8-sig"))
         except (OSError, RecursionError, tomllib.TOMLDecodeError):
             data = {}
         project = data.get("project")

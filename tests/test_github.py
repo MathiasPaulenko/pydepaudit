@@ -194,6 +194,47 @@ def test_repo_health_deep_json_is_handled_gracefully() -> None:
 
 
 @respx.mock
+def test_repo_health_non_dict_json_is_clean_error() -> None:
+    respx.get("https://api.github.com/repos/a/b").mock(
+        return_value=httpx.Response(200, json=[1, 2])
+    )
+    with pytest.raises(ValueError, match="malformed GitHub"):
+        GitHubClient().repo_health("a/b")
+
+
+@respx.mock
+def test_repo_health_corrupt_cache_timestamp_refetches(tmp_path: Path) -> None:
+    cache = FileCache(tmp_path / "cache")
+    cache.set(
+        "github:a/b",
+        {
+            "found": True,
+            "requested_repo": "a/b",
+            "url": "https://github.com/a/b",
+            "archived": False,
+            "pushed_at": "not-a-date",
+            "open_issues": 0,
+            "contributors": None,
+            "scorecard": None,
+        },
+    )
+    route = respx.get("https://api.github.com/repos/a/b").mock(
+        return_value=httpx.Response(
+            200, json={"archived": False, "pushed_at": None, "open_issues_count": 0}
+        )
+    )
+    respx.get("https://api.github.com/repos/a/b/contributors").mock(
+        return_value=httpx.Response(200, json=[])
+    )
+    respx.get("https://api.securityscorecards.dev/projects/github.com/a/b").mock(
+        return_value=httpx.Response(404)
+    )
+    health = GitHubClient(cache=cache).repo_health("a/b")
+    assert route.call_count == 1  # corrupt cache → refetch
+    assert health is not None
+
+
+@respx.mock
 def test_github_same_origin_rename_redirect_uses_new_repo(
     tmp_path: Path,
 ) -> None:
@@ -370,6 +411,36 @@ def test_repo_health_rate_limited_not_cached(tmp_path: Path) -> None:
 
 
 @respx.mock
+def test_repo_health_degrades_on_server_outage(tmp_path: Path) -> None:
+    # a 5xx from GitHub must not abort the whole audit — repo health is
+    # a best-effort signal, like the contributors/scorecard endpoints
+    cache = FileCache(tmp_path / "cache")
+    route = respx.get("https://api.github.com/repos/a/b").mock(
+        return_value=httpx.Response(500)
+    )
+    client = GitHubClient(cache=cache)
+    assert client.repo_health("a/b") is None
+    assert client.repo_health("a/b") is None
+    assert route.call_count == 2  # outage is transient — not cached as "gone"
+
+
+@respx.mock
+def test_repo_health_degrades_on_network_error(tmp_path: Path) -> None:
+    respx.get("https://api.github.com/repos/a/b").mock(
+        side_effect=httpx.ConnectError("down")
+    )
+    assert GitHubClient().repo_health("a/b") is None
+
+
+@respx.mock
+def test_repo_health_client_errors_still_surface(tmp_path: Path) -> None:
+    # auth problems (401) must stay visible, not silently degrade
+    respx.get("https://api.github.com/repos/a/b").mock(return_value=httpx.Response(401))
+    with pytest.raises(httpx.HTTPStatusError):
+        GitHubClient().repo_health("a/b")
+
+
+@respx.mock
 def test_repo_health_aux_endpoint_outage() -> None:
     # scorecard service down (DNS/timeout) must not kill the audit
     respx.get("https://api.github.com/repos/a/b").mock(
@@ -460,3 +531,11 @@ def test_find_repo_www_prefix() -> None:
     assert find_repo({"Source": "https://www.github.com/a/b"}) == "a/b"
     # but a lookalike subdomain is still rejected
     assert find_repo({"Source": "https://wwwx.github.com/a/b"}) is None
+
+
+def test_find_repo_case_insensitive_host() -> None:
+    # URL hosts are case-insensitive; a project_urls entry may use any casing
+    assert find_repo({"Source": "HTTPS://GitHub.COM/Owner/Repo"}) == "Owner/Repo"
+    assert find_repo({"Source": "https://GITHUB.com/a/b.git"}) == "a/b"
+    # lookalike hosts stay rejected regardless of casing
+    assert find_repo({"Source": "HTTPS://X.GitHub.COM/a/b"}) is None

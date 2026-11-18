@@ -19,7 +19,8 @@ BASE_URL = "https://api.github.com"
 # GitHub owner/repo names are restricted to alphanumerics, '-', '_' and '.'
 _REPO_CHARS = r"[A-Za-z0-9_.-]+"
 _REPO_RE = re.compile(
-    rf"(?:^|://|@)(?:www\.)?github\.com[/:]({_REPO_CHARS})/({_REPO_CHARS})"
+    rf"(?:^|://|@)(?:www\.)?github\.com[/:]({_REPO_CHARS})/({_REPO_CHARS})",
+    re.IGNORECASE,
 )
 _REPO_FULL_RE = re.compile(rf"{_REPO_CHARS}/{_REPO_CHARS}")
 _NON_REPO_OWNERS = {"sponsors", "topics", "marketplace", "collections", "features"}
@@ -107,6 +108,12 @@ class GitHubClient:
         except _TransientError:
             # rate-limited or blocked — don't cache a transient miss as "gone"
             return None
+        except httpx.TransportError:
+            return None  # network blip — repo health is a best-effort signal
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code >= 500:
+                return None  # upstream outage — degrade like the aux endpoints
+            raise
         if self._cache is not None:
             self._cache.set(key, _to_cached(health, repo))
         return health

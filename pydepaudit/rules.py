@@ -154,9 +154,14 @@ def _is_weak(option: str) -> bool:
 
 
 def _is_denied(option: str, config: Config) -> bool:
-    # strip weak-copyleft markers so "LGPL" doesn't match the "GPL" pattern
-    strong = option.replace("LGPL", "")
-    return any(pattern.upper() in strong for pattern in config.denied_licenses)
+    upper = option.upper()
+    return any(
+        # strip weak-copyleft markers so "GPL" doesn't match inside "LGPL",
+        # but an explicitly denied weak license must still match itself
+        pattern.upper()
+        in (upper if pattern.upper() in _WEAK_COPYLEFT else upper.replace("LGPL", ""))
+        for pattern in config.denied_licenses
+    )
 
 
 def _staleness_findings(result: AuditResult, config: Config) -> list[Finding]:

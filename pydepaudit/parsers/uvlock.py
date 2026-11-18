@@ -13,7 +13,7 @@ def parse(path: Path) -> list[Dependency]:
     skipped.
     """
     try:
-        data = tomllib.loads(path.read_text(encoding="utf-8"))
+        data = tomllib.loads(path.read_text(encoding="utf-8-sig"))
     except RecursionError as exc:
         raise ValueError(f"{path} is too deeply nested") from exc
     packages = data.get("package")

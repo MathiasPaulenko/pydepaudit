@@ -389,3 +389,108 @@ def test_package_canonicalizes_name(tmp_path: Path) -> None:
     assert PyPIClient(cache=cache).package("Foo_Bar") is not None
     assert PyPIClient(cache=cache).package("foo-bar") is not None
     assert route.call_count == 1
+
+
+@respx.mock
+def test_cache_roundtrip_keeps_release_list(tmp_path: Path) -> None:
+    payload = {
+        "info": {"name": "t", "version": "2.0", "license_expression": "MIT"},
+        "releases": {"1.0": [], "2.0": []},
+    }
+    respx.get("https://pypi.org/pypi/t/json").mock(
+        return_value=httpx.Response(200, json=payload)
+    )
+    cache = FileCache(tmp_path / "cache")
+    meta = PyPIClient(cache=cache).package("t")
+    assert meta is not None and meta.releases == ("1.0", "2.0")
+    cached = PyPIClient(cache=cache).package("t")
+    assert cached is not None and cached.releases == ("1.0", "2.0")
+
+
+@respx.mock
+def test_cache_entry_without_release_list_still_loads(tmp_path: Path) -> None:
+    # entries written before the releases field existed must keep working
+    cache = FileCache(tmp_path / "cache")
+    cache.set(
+        "pypi:t",
+        {
+            "found": True,
+            "name": "t",
+            "latest_version": "1.0",
+            "license": "MIT",
+            "last_release": None,
+            "project_urls": {},
+            "yanked_versions": [],
+        },
+    )
+    meta = PyPIClient(cache=cache).package("t")
+    assert meta is not None and meta.releases == ()
+
+
+@respx.mock
+def test_cache_release_list_must_be_strings(tmp_path: Path) -> None:
+    cache = FileCache(tmp_path / "cache")
+    cache.set(
+        "pypi:t",
+        {
+            "found": True,
+            "name": "t",
+            "latest_version": "1.0",
+            "license": "MIT",
+            "last_release": None,
+            "project_urls": {},
+            "yanked_versions": [],
+            "releases": [1, 2],
+        },
+    )
+    route = respx.get("https://pypi.org/pypi/t/json").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "info": {"name": "t", "version": "1.0", "license_expression": "MIT"},
+                "releases": {},
+            },
+        )
+    )
+    meta = PyPIClient(cache=cache).package("t")
+    assert route.call_count == 1  # malformed cache → refetch
+    assert meta is not None and meta.name == "t"
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"name": "t\x00"},  # unmatchable package name
+        {"latest_version": "not a version"},
+        {"last_release": "not-a-date"},
+    ],
+)
+def test_cache_corrupt_fields_refetch(tmp_path: Path, patch: dict) -> None:
+    cache = FileCache(tmp_path / "cache")
+    cache.set(
+        "pypi:t",
+        {
+            "found": True,
+            "name": "t",
+            "latest_version": "1.0",
+            "license": "MIT",
+            "last_release": None,
+            "project_urls": {},
+            "yanked_versions": [],
+            "releases": [],
+            **patch,
+        },
+    )
+    route = respx.get("https://pypi.org/pypi/t/json").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "info": {"name": "t", "version": "1.0", "license_expression": "MIT"},
+                "releases": {},
+            },
+        )
+    )
+    meta = PyPIClient(cache=cache).package("t")
+    assert route.call_count == 1
+    assert meta is not None and meta.name == "t"

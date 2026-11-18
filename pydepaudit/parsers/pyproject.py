@@ -13,7 +13,7 @@ from pydepaudit.parsers.markers import applies_to_env
 def parse(path: Path) -> list[Dependency]:
     """Extract dependencies from [project].dependencies and optional-dependencies."""
     try:
-        data = tomllib.loads(path.read_text(encoding="utf-8"))
+        data = tomllib.loads(path.read_text(encoding="utf-8-sig"))
     except RecursionError as exc:
         raise ValueError(f"{path} is too deeply nested") from exc
     project = data.get("project")
@@ -32,8 +32,11 @@ def parse(path: Path) -> list[Dependency]:
 
     groups = data.get("dependency-groups")
     if isinstance(groups, dict):
-        for name in groups:
-            specs.extend(_expand_group(name, groups, stack=frozenset()))
+        try:
+            for name in groups:
+                specs.extend(_expand_group(name, groups, stack=frozenset()))
+        except RecursionError as exc:
+            raise ValueError(f"{path} dependency groups are too deeply nested") from exc
 
     deps = []
     seen: set[tuple[str, str]] = set()

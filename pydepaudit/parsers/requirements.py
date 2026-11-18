@@ -29,7 +29,10 @@ def parse(path: Path) -> list[Dependency]:
     """
     deps: list[Dependency] = []
     constraints: dict[str, str] = {}
-    _collect(path, deps, constraints, seen=set(), as_constraint=False, nested=False)
+    try:
+        _collect(path, deps, constraints, seen=set(), as_constraint=False, nested=False)
+    except RecursionError as exc:
+        raise ValueError(f"{path} include chain is too deep") from exc
     return [replace(dep, specifier=_apply(dep, constraints)) for dep in deps]
 
 
@@ -43,6 +46,8 @@ def _collect(
 ) -> None:
     try:
         resolved = path.resolve()
+    except RecursionError:
+        raise  # a deep include chain must surface as a clean parse error
     except (OSError, RuntimeError, ValueError):
         if not nested:
             raise

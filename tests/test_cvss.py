@@ -26,6 +26,9 @@ def test_base_score_invalid() -> None:
     assert base_score("CVSS:3.1/AV:N/AV:L/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H") is None
     assert base_score("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H/ZZ:X") is None
     assert base_score("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H/E:Z") is None
+    # incomplete base metrics → unscorable, not a crash
+    assert base_score("CVSS:3.1/AV:N/AC:L") is None
+    assert base_score("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H") is None
     assert base_score(None) is None  # type: ignore[arg-type]
 
 
@@ -61,6 +64,16 @@ def test_severity_band(score: float, band: str) -> None:
             8.4,
         ),
         ("CVSS:4.0/AV:N/AC:L/AT:P/PR:L/UI:P/VC:N/VI:H/VA:N/SC:H/SI:N/SA:H/IR:H", 7.0),
+        # eq1 = 2 branch (physical attack vector)
+        (
+            "CVSS:4.0/AV:P/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:H/SI:H/SA:H",
+            8.6,
+        ),
+        # eq4 = 2 branch (all-low system impact)
+        (
+            "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:L/VI:L/VA:L/SC:L/SI:L/SA:L",
+            6.9,
+        ),
     ],
 )
 def test_base_score_v4(vector: str, expected: float) -> None:

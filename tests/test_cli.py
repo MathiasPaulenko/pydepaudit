@@ -405,6 +405,15 @@ def test_check_license_override(tmp_path: Path) -> None:
     assert result.exit_code == 1  # no deps found, but override parsed fine
 
 
+def test_check_blank_license_override_is_clean_error(tmp_path: Path) -> None:
+    # a whitespace-only --license must exit with a message, not a traceback
+    (tmp_path / "requirements.txt").write_text("pkg\n")
+    result = runner.invoke(app, ["check", str(tmp_path), "--license", "   "])
+    assert result.exit_code == 2
+    assert "Invalid --license" in result.output
+    assert "Traceback" not in result.output
+
+
 def test_check_invalid_config(tmp_path: Path) -> None:
     (tmp_path / ".pydepaudit.toml").write_text("stale_months = [\n")
     result = runner.invoke(app, ["check", str(tmp_path)])
@@ -447,6 +456,124 @@ def test_check_many_findings_truncated(tmp_path: Path, monkeypatch) -> None:
     assert result.exit_code == 0
     # 6 vulns + 1 stale finding → first 4 shown, rest summarized
     assert "+3 more" in result.output
+
+
+@respx.mock
+def test_check_wildcard_pin_audits_matching_release(tmp_path: Path) -> None:
+    # '==2.31.*' can never install 2.32.3 — OSV must be asked about 2.31.0
+    (tmp_path / "requirements.txt").write_text("requests==2.31.*\n")
+    payload = {
+        "info": {"name": "requests", "version": "2.32.3", "license_expression": "MIT"},
+        "releases": {"2.31.0": [], "2.32.3": []},
+    }
+    respx.get("https://pypi.org/pypi/requests/json").mock(
+        return_value=httpx.Response(200, json=payload)
+    )
+    osv_route = respx.post("https://api.osv.dev/v1/querybatch").mock(
+        return_value=httpx.Response(200, json={"results": [{"vulns": []}]})
+    )
+    result = runner.invoke(app, ["check", str(tmp_path)])
+    assert result.exit_code == 0
+    body = json.loads(osv_route.calls.last.request.content)
+    assert body["queries"][0]["version"] == "2.31.0"
+
+
+@respx.mock
+def test_check_upper_bound_audits_release_inside_range(tmp_path: Path) -> None:
+    (tmp_path / "requirements.txt").write_text("requests<2.32.0\n")
+    payload = {
+        "info": {"name": "requests", "version": "2.32.3", "license_expression": "MIT"},
+        "releases": {"2.31.0": [], "2.32.3": []},
+    }
+    respx.get("https://pypi.org/pypi/requests/json").mock(
+        return_value=httpx.Response(200, json=payload)
+    )
+    osv_route = respx.post("https://api.osv.dev/v1/querybatch").mock(
+        return_value=httpx.Response(200, json={"results": [{"vulns": []}]})
+    )
+    result = runner.invoke(app, ["check", str(tmp_path)])
+    assert result.exit_code == 0
+    body = json.loads(osv_route.calls.last.request.content)
+    assert body["queries"][0]["version"] == "2.31.0"
+
+
+@respx.mock
+def test_show_skips_osv_when_latest_version_missing(tmp_path: Path) -> None:
+    payload = {"info": {"name": "x", "license_expression": "MIT"}, "releases": {}}
+    respx.get("https://pypi.org/pypi/x/json").mock(
+        return_value=httpx.Response(200, json=payload)
+    )
+    osv_route = respx.post("https://api.osv.dev/v1/querybatch").mock(
+        return_value=httpx.Response(200, json={"results": []})
+    )
+    result = runner.invoke(app, ["show", "x"])
+    assert result.exit_code == 0
+    assert osv_route.call_count == 0  # no version → no pointless OSV query
+
+
+@respx.mock
+def test_check_no_cache_bypasses_cache(tmp_path: Path) -> None:
+    (tmp_path / "requirements.txt").write_text("requests==2.31.0\n")
+    respx.get("https://pypi.org/pypi/requests/json").mock(
+        return_value=httpx.Response(200, json=REQUESTS_JSON)
+    )
+    respx.post("https://api.osv.dev/v1/querybatch").mock(
+        return_value=httpx.Response(200, json={"results": [{"vulns": []}]})
+    )
+    first = runner.invoke(app, ["check", str(tmp_path), "--no-cache"])
+    second = runner.invoke(app, ["check", str(tmp_path), "--no-cache"])
+    assert first.exit_code == 0 and second.exit_code == 0
+    # both runs hit the network — nothing was cached
+    pypi_calls = [c for c in respx.calls if c.request.url.host == "pypi.org"]
+    assert len(pypi_calls) == 2
+
+
+@respx.mock
+def test_check_installed_json_output(tmp_path: Path, monkeypatch) -> None:
+    from pydepaudit.parsers import installed as installed_parsers
+
+    monkeypatch.setattr(
+        installed_parsers,
+        "parse",
+        lambda: [Dependency("pkg", "==1.0", "installed")],
+    )
+    respx.get("https://pypi.org/pypi/pkg/json").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "info": {"name": "pkg", "version": "1.0", "license_expression": "MIT"},
+                "releases": {"1.0": []},
+            },
+        )
+    )
+    respx.post("https://api.osv.dev/v1/querybatch").mock(
+        return_value=httpx.Response(200, json={"results": [{"vulns": []}]})
+    )
+    result = runner.invoke(
+        app, ["check", str(tmp_path), "--installed", "--format", "json"]
+    )
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["dependencies"][0]["source"] == "installed"
+
+
+@respx.mock
+def test_show_without_repo_urls() -> None:
+    respx.get("https://pypi.org/pypi/solo/json").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "info": {"name": "solo", "version": "1.0", "license_expression": "MIT"},
+                "releases": {"1.0": []},
+            },
+        )
+    )
+    respx.post("https://api.osv.dev/v1/querybatch").mock(
+        return_value=httpx.Response(200, json={"results": [{"vulns": []}]})
+    )
+    result = runner.invoke(app, ["show", "solo"])
+    assert result.exit_code == 0
+    assert "Repo:" not in result.output
 
 
 @respx.mock

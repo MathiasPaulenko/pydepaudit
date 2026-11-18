@@ -44,8 +44,9 @@ def main(
 ) -> None:
     """pydepaudit entrypoint."""
     # upstream API data can carry any Unicode; never crash on legacy consoles
-    if isinstance(sys.stdout, io.TextIOWrapper):
-        sys.stdout.reconfigure(errors="backslashreplace")
+    for stream in (sys.stdout, sys.stderr):
+        if isinstance(stream, io.TextIOWrapper):
+            stream.reconfigure(errors="backslashreplace")
 
 
 @app.command()
@@ -99,7 +100,11 @@ def check(
         typer.echo(f"Invalid .pydepaudit.toml: {exc}", err=True)
         raise typer.Exit(2) from exc
     if license_:
-        config = replace(config, project_license=license_)
+        try:
+            config = replace(config, project_license=license_)
+        except ValueError as exc:
+            typer.echo(f"Invalid --license: {exc}", err=True)
+            raise typer.Exit(2) from exc
     cache = None
     if not no_cache:
         with contextlib.suppress(OSError, RuntimeError):
@@ -158,7 +163,12 @@ def show(
             typer.echo(f"{_sanitize(package)} not found on PyPI.")
             raise typer.Exit(1)
 
-        batch = osv.query_batch([(meta.name, meta.latest_version)])
+        # a missing version field is not a queryable release — skip OSV
+        batch = (
+            osv.query_batch([(meta.name, meta.latest_version)])
+            if meta.latest_version
+            else [[]]
+        )
         vulns = batch[0] if batch else []
         repo = find_repo(meta.project_urls)
         health = github.repo_health(repo) if repo else None

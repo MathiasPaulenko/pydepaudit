@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The audited version now respects the declared range: `==1.0.*`, `~=1.0`,
+  `<2.0` and similar specifiers resolve to the newest installable release
+  inside the range instead of querying OSV about the absolute latest release
+  (which could hide vulnerabilities affecting the pinned range). Yanked
+  releases are skipped for range and unpinned selection, exactly like pip.
+- A requirements include chain deeper than the interpreter recursion limit no
+  longer silently drops every dependency (the `RecursionError` was swallowed
+  by the resolve error handler); it now fails with a clean parse error. The
+  same protection covers PEP 735 dependency-group include chains.
+- `denied_licenses` entries naming a weak-copyleft license (`LGPL`, `MPL`,
+  `EPL`) now produce the high-severity denied finding instead of being
+  neutralized by the LGPL-stripping heuristic.
+- OSV records carrying a plain numeric CVSS score (the `CVSS` v2 style) now
+  map to a severity band instead of `unknown`.
+- GitHub repository URLs with an uppercase host (`HTTPS://GitHub.COM/...`)
+  are recognized; lookalike hosts stay rejected.
+- `check --license " "` exits with a clean message instead of a traceback.
+- GitHub repository health degrades to `None` on 5xx responses and network
+  errors instead of aborting the whole audit; client errors (e.g. 401) still
+  surface.
+- TOML dependency files and `.pydepaudit.toml` with a UTF-8 BOM (as written by
+  some Windows editors) parse instead of failing.
+- `show` skips the OSV query when PyPI reports no version for a package.
+- stderr is reconfigured with `backslashreplace` alongside stdout, so error
+  messages containing Unicode cannot crash legacy consoles.
+
 ## [1.0.0] - 2026-10-15
 
 ### Added
